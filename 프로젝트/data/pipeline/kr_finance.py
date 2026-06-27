@@ -79,6 +79,82 @@ def _parse_dart_fs(fs: pd.DataFrame, ticker: str, year: int, q: int) -> dict | N
     }
 
 
+# ── 네이버 금융 폴백 경로 ────────────────────────────────────────────────────
+
+def _build_via_naver(tickers: list[str]) -> pd.DataFrame:
+    """네이버 금융 메인 페이지에서 연간 EPS/BPS/ROE/SPS 수집 (최근 3년)"""
+    import requests
+    from bs4 import BeautifulSoup
+    from io import StringIO
+
+    def _fetch_one(code):
+        url = f"https://finance.naver.com/item/main.naver?code={code}"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        r.encoding = "euc-kr"
+        tables = pd.read_html(StringIO(r.text))
+        if len(tables) < 7:
+            return []
+
+        t = tables[4]
+        t.columns = t.columns.get_level_values(1)
+
+        # 연간 컬럼만 (E 예상치·분기 제외), iloc 기반으로 중복 컬럼 방지
+        all_cols = t.columns.tolist()
+        annual_indices = [i for i, c in enumerate(all_cols)
+                          if isinstance(c, str) and len(c) == 7
+                          and "." in c and "(E)" not in c
+                          and all_cols.index(c) == i]  # 첫 등장만
+        if not annual_indices:
+            return []
+
+        # 주식수 (tables[6])
+        shares = None
+        for val in tables[6].values.flatten():
+            try:
+                v = int(str(val).replace(",", ""))
+                if v > 1_000_000:
+                    shares = v
+                    break
+            except Exception:
+                pass
+
+        rows = []
+        for idx in annual_indices:
+            col_name = all_cols[idx]
+            try:
+                date = pd.Timestamp(col_name.replace(".", "-") + "-01") + pd.offsets.MonthEnd(0)
+                eps = t.iloc[9, idx]
+                bps = t.iloc[11, idx]
+                roe = t.iloc[5, idx]
+                rev = t.iloc[0, idx]  # 억원
+                sps = (float(rev) * 1e8 / shares) if shares and pd.notna(rev) else np.nan
+                rows.append({
+                    "date":         date,
+                    "ticker":       code,
+                    "eps":          float(eps) if pd.notna(eps) else np.nan,
+                    "bps":          float(bps) if pd.notna(bps) else np.nan,
+                    "roe":          float(roe) / 100 if pd.notna(roe) else np.nan,
+                    "sps":          sps,
+                    "gross_profit": np.nan,
+                    "total_assets": np.nan,
+                })
+            except Exception:
+                pass
+        return rows
+
+    all_rows = []
+    for i, code in enumerate(tickers, 1):
+        try:
+            all_rows.extend(_fetch_one(code))
+        except Exception:
+            pass
+        if i % 20 == 0:
+            print(f"  네이버 재무: {i}/{len(tickers)}")
+        time.sleep(0.3)
+
+    return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
+
+
 # ── pykrx 폴백 경로 ─────────────────────────────────────────────────────────
 
 def _build_via_pykrx(tickers: list[str], start: str, end: str) -> pd.DataFrame:
@@ -143,6 +219,14 @@ def build(tickers: list[str],
             df = _build_via_pykrx(tickers, start, end)
         except Exception as e:
             print(f"  pykrx 실패: {e}")
+
+    # 3순위: 네이버 금융 스크래핑 (최근 3년 연간, EPS/BPS/ROE/SPS)
+    if df.empty:
+        print("[kr_finance] 네이버 금융으로 수집 중... (최근 3년 연간)")
+        try:
+            df = _build_via_naver(tickers)
+        except Exception as e:
+            print(f"  네이버 실패: {e}")
 
     if df.empty:
         print("  [경고] KR 재무 데이터 수집 실패. data/raw/kr_finance.parquet 직접 제공 필요")
