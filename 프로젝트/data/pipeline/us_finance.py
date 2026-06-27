@@ -17,7 +17,7 @@ from config import RAW_DIR, START_DATE, END_DATE, US_FILING_LAG_DAYS
 
 
 def _get_quarterly_financials(ticker: str) -> pd.DataFrame:
-    """yfinance에서 분기별 재무 항목 추출"""
+    """yfinance에서 연간 재무 항목 추출 (최근 4~5년)"""
     try:
         t = yf.Ticker(ticker)
         info  = t.info
@@ -25,8 +25,8 @@ def _get_quarterly_financials(ticker: str) -> pd.DataFrame:
         if not shares or shares == 0:
             return pd.DataFrame()
 
-        inc  = t.quarterly_income_stmt
-        bal  = t.quarterly_balance_sheet
+        inc  = t.income_stmt        # 연간 (4~5년)
+        bal  = t.balance_sheet      # 연간 (4~5년)
         if inc is None or bal is None or inc.empty or bal.empty:
             return pd.DataFrame()
 
