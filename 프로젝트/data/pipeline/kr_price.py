@@ -32,6 +32,18 @@ def get_historical_kospi200(dates: pd.DatetimeIndex) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+_FDR_KRX_CACHE: pd.DataFrame | None = None
+
+def _get_fdr_kospi200() -> list[str]:
+    """FDR KRX 목록에서 KOSPI 시총 상위 200종목 반환 (캐시)"""
+    global _FDR_KRX_CACHE
+    if _FDR_KRX_CACHE is None:
+        df = fdr.StockListing("KRX")
+        _FDR_KRX_CACHE = df[df["Market"] == "KOSPI"].copy()
+    top200 = _FDR_KRX_CACHE.nlargest(200, "Marcap")
+    return top200["Code"].tolist()
+
+
 def _fetch_kospi200_at(date: pd.Timestamp) -> list[str]:
     """특정 날짜의 코스피200 구성종목 반환"""
     d_str = date.strftime("%Y%m%d")
@@ -40,18 +52,22 @@ def _fetch_kospi200_at(date: pd.Timestamp) -> list[str]:
     try:
         from pykrx import stock as krx
         df = krx.get_index_portfolio_deposit_file("1028", d_str)
-        if df is not None and len(df) > 0:
-            return list(df["티커"] if "티커" in df.columns else df.iloc[:, 0])
+        if hasattr(df, "empty") and not df.empty:
+            col = "티커" if "티커" in df.columns else df.columns[0]
+            return df[col].tolist()
     except Exception:
         pass
 
-    # 2순위: FinanceDataReader 현재 코스피200 (생존편향 존재하나 대체 불가 시 사용)
+    # 2순위: FinanceDataReader KRX 시총 상위 200 (생존편향 존재하나 대체 불가 시 사용)
     try:
-        df = fdr.StockListing("KOSPI200")
-        print(f"  [경고] {d_str} 코스피200 과거 구성종목 조회 실패 → 현재 구성종목 사용 (생존편향 주의)")
-        return df["Code"].tolist()
+        tickers = _get_fdr_kospi200()
+        if tickers:
+            print(f"  [경고] {d_str} pykrx 조회 실패 → FDR KOSPI 시총 상위 200 사용 (생존편향 주의)")
+            return tickers
     except Exception:
-        return []
+        pass
+
+    return []
 
 
 # ── 가격 데이터 ────────────────────────────────────────────────────────────
@@ -106,6 +122,10 @@ def build(start: str = START_DATE, end: str = END_DATE) -> tuple[pd.DataFrame, p
     universe_df = get_historical_kospi200(quarter_dates)
     universe_df.to_parquet(universe_path, index=False)
 
+    if universe_df.empty or "ticker" not in universe_df.columns:
+        print("[kr_price] 오류: 유니버스 데이터를 가져오지 못했습니다.")
+        return pd.DataFrame(), universe_df
+
     all_tickers = universe_df["ticker"].unique().tolist()
     print(f"[kr_price] 총 {len(all_tickers)}개 종목 가격 다운로드 중...")
     price_pivot = download_prices(all_tickers, start, end)
@@ -113,3 +133,7 @@ def build(start: str = START_DATE, end: str = END_DATE) -> tuple[pd.DataFrame, p
 
     print(f"[kr_price] 완료: {price_pivot.shape}")
     return price_pivot, universe_df
+
+
+if __name__ == "__main__":
+    build()
