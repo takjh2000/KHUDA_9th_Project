@@ -36,7 +36,7 @@ def _compute_raw(panel: pd.DataFrame, factor: str) -> pd.DataFrame:
 
     # 필요 컬럼 확인
     if num_col not in p.columns:
-        raise KeyError(f"패널에 '{num_col}' 컬럼 없음 — 재무 데이터 확인 필요")
+        raise KeyError(f"패널에 '{num_col}' 컬럼 없음 -- 재무 데이터 확인 필요")
 
     if mode == "div":
         if den_col is None:
