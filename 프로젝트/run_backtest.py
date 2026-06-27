@@ -69,7 +69,7 @@ def run_market(market: str,
 
     for fname in target_factors:
         if fname not in all_factors:
-            print(f"  {fname}: 팩터 데이터 없음 — 건너뜀")
+            print(f"  {fname}: 팩터 데이터 없음 -- 건너뜀")
             continue
 
         factor_pivot = all_factors[fname]
