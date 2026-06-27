@@ -87,10 +87,20 @@ def plot_annual_heatmap(results: dict[str, BacktestResult],
 
     heat = pd.DataFrame(ann_rows).T * 100   # percent
 
+    if heat.empty or heat.shape[1] == 0:
+        return None
+
+    valid_vals = heat.values[~np.isnan(heat.values)]
+    if len(valid_vals) == 0:
+        return None
+
+    vmin, vmax = float(valid_vals.min()), float(valid_vals.max())
+    if vmin == vmax:
+        vmin -= 1.0
+        vmax += 1.0
+
     fig, ax = plt.subplots(figsize=(max(8, heat.shape[1] * 1.1), 4))
-    norm = mcolors.TwoSlopeNorm(
-        vmin=heat.values.min(), vcenter=0, vmax=heat.values.max()
-    )
+    norm = mcolors.TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
     im = ax.imshow(heat.values, cmap="RdYlGn", norm=norm, aspect="auto")
 
     ax.set_xticks(range(heat.shape[1]))
