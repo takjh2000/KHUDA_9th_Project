@@ -32,8 +32,9 @@ def _finance_to_daily(finance_df: pd.DataFrame,
     for ticker, grp in finance_df.groupby("ticker"):
         grp = grp.sort_values("date").set_index("date")[available_cols]
 
-        # 전체 거래일 인덱스에 reindex 후 ffill
-        grp = grp.reindex(price_index).ffill()
+        # 재무 날짜가 비거래일일 수 있으므로 합집합으로 ffill 후 거래일만 추출
+        extended = price_index.union(grp.index).sort_values()
+        grp = grp.reindex(extended).ffill().reindex(price_index)
         grp["ticker"] = ticker
         result_frames.append(grp.reset_index().rename(columns={"index": "date"}))
 
@@ -65,7 +66,7 @@ def build(market: str) -> pd.DataFrame:
     # 재무 로드
     finance_path = RAW_DIR / f"{market.lower()}_finance.parquet"
     if not finance_path.exists():
-        print(f"  [경고] {finance_path} 없음 — 팩터 계산 불가")
+        print(f"  [경고] {finance_path} 없음 - 팩터 계산 불가")
         finance_long = pd.DataFrame()
     else:
         finance_df   = pd.read_parquet(finance_path)
@@ -86,17 +87,17 @@ def build(market: str) -> pd.DataFrame:
     else:
         panel = price_long
 
-    # 결측 3분기(≈63 거래일) 이상 연속 종목 제거
+    # 재무 데이터가 단 한 건도 없는 종목만 제거
     fin_cols = [c for c in ["bps", "eps", "sps"] if c in panel.columns]
     if fin_cols:
-        max_miss = 63 * 3
         ticker_miss = (
             panel.groupby("ticker")[fin_cols[0]]
             .apply(lambda x: x.isna().sum())
         )
-        bad_tickers = ticker_miss[ticker_miss > max_miss].index
+        total_rows = panel.groupby("ticker")[fin_cols[0]].count() + ticker_miss
+        bad_tickers = ticker_miss[ticker_miss >= total_rows].index
         panel = panel[~panel["ticker"].isin(bad_tickers)]
-        print(f"  결측 과다 제거: {len(bad_tickers)}개 종목")
+        print(f"  재무 전무 종목 제거: {len(bad_tickers)}개")
 
     panel = panel.sort_values(["date", "ticker"]).reset_index(drop=True)
     panel.to_parquet(save_path, index=False)
