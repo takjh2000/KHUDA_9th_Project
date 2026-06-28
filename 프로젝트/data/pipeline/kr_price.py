@@ -29,6 +29,8 @@ def get_historical_kospi200(dates: pd.DatetimeIndex) -> pd.DataFrame:
         tickers = _fetch_kospi200_at(d)
         for t in tickers:
             rows.append({"date": d, "ticker": t})
+    if not rows:
+        return pd.DataFrame(columns=["date", "ticker"])
     return pd.DataFrame(rows)
 
 
@@ -39,9 +41,16 @@ def _get_fdr_kospi200() -> list[str]:
     global _FDR_KRX_CACHE
     if _FDR_KRX_CACHE is None:
         df = fdr.StockListing("KRX")
-        _FDR_KRX_CACHE = df[df["Market"] == "KOSPI"].copy()
-    top200 = _FDR_KRX_CACHE.nlargest(200, "Marcap")
-    return top200["Code"].tolist()
+        # FDR 버전마다 컬럼명이 다를 수 있음 (Market / 시장 등)
+        mkt_col = next((c for c in df.columns if c in ("Market", "시장")), None)
+        _FDR_KRX_CACHE = df[df[mkt_col] == "KOSPI"].copy() if mkt_col else df.copy()
+
+    cap_col  = next((c for c in _FDR_KRX_CACHE.columns if c in ("Marcap", "시가총액", "MktCap")), None)
+    code_col = next((c for c in _FDR_KRX_CACHE.columns if c in ("Code", "Symbol", "종목코드")), None)
+    if not cap_col or not code_col:
+        return []
+    top200 = _FDR_KRX_CACHE.nlargest(200, cap_col)
+    return top200[code_col].tolist()
 
 
 def _fetch_kospi200_at(date: pd.Timestamp) -> list[str]:
@@ -120,11 +129,13 @@ def build(start: str = START_DATE, end: str = END_DATE) -> tuple[pd.DataFrame, p
     quarter_dates = pd.date_range(start, end, freq="QE")
     print(f"[kr_price] {len(quarter_dates)}개 분기 유니버스 조회 중...")
     universe_df = get_historical_kospi200(quarter_dates)
-    universe_df.to_parquet(universe_path, index=False)
 
     if universe_df.empty or "ticker" not in universe_df.columns:
         print("[kr_price] 오류: 유니버스 데이터를 가져오지 못했습니다.")
+        print("  pykrx 및 FDR 모두 실패. 네트워크 연결과 패키지 버전을 확인하세요.")
         return pd.DataFrame(), universe_df
+
+    universe_df.to_parquet(universe_path, index=False)
 
     all_tickers = universe_df["ticker"].unique().tolist()
     print(f"[kr_price] 총 {len(all_tickers)}개 종목 가격 다운로드 중...")

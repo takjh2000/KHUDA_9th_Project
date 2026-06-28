@@ -16,6 +16,11 @@ from data.build_panel import build as build_panel
 def run_kr():
     print("\n[Phase 1-1] KR 가격 데이터")
     price_piv, uni_df = kr_price.build(START_DATE, END_DATE)
+
+    if uni_df.empty or "ticker" not in uni_df.columns:
+        print("[run_kr] 유니버스를 가져오지 못해 KR 파이프라인을 중단합니다.")
+        return
+
     tickers = uni_df["ticker"].unique().tolist()
 
     print("\n[Phase 1-2] KR 재무 데이터")
@@ -28,6 +33,11 @@ def run_kr():
 def run_us():
     print("\n[Phase 1-1] US 가격 데이터")
     price_piv, uni_df = us_price.build(START_DATE, END_DATE)
+
+    if uni_df.empty or "ticker" not in uni_df.columns:
+        print("[run_us] 유니버스를 가져오지 못해 US 파이프라인을 중단합니다.")
+        return
+
     tickers = uni_df["ticker"].unique().tolist()
 
     print("\n[Phase 1-2] US 재무 데이터")
