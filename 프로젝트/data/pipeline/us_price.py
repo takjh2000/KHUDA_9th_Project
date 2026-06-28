@@ -29,7 +29,8 @@ def get_historical_sp500(dates: pd.DatetimeIndex) -> pd.DataFrame:
     """
     hist_csv = RAW_DIR / "sp500_historical.csv"
     if hist_csv.exists():
-        hist = pd.read_csv(hist_csv, parse_dates=["date"])
+        hist = pd.read_csv(hist_csv, encoding="utf-8-sig")
+        hist["date"] = pd.to_datetime(hist["date"])
         rows = []
         for d in dates:
             mask = hist["date"] <= d
