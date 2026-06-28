@@ -22,7 +22,7 @@ def _finance_to_daily(finance_df: pd.DataFrame,
     - date 컬럼 = 해당 재무 데이터를 사용 가능한 날 (공시 지연 적용 후)
     - price_index: 전체 거래일 목록
     """
-    fin_cols = ["bps", "eps", "sps", "roe", "gross_profit", "total_assets"]
+    fin_cols = ["bps", "eps", "sps", "roe", "gross_profit", "total_assets", "ops", "shares"]
     available_cols = [c for c in fin_cols if c in finance_df.columns]
 
     finance_df = finance_df.copy()

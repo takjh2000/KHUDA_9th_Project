@@ -24,58 +24,130 @@ from config import RAW_DIR, START_DATE, END_DATE, KR_FILING_LAG_DAYS
 # ── OpenDartReader 경로 ────────────────────────────────────────────────────
 
 def _build_via_dart(tickers: list[str], start: str, end: str) -> pd.DataFrame:
-    """OpenDartReader로 분기별 재무 수집"""
-    import OpenDartReader as dart
+    """OpenDartReader로 연간(FY) 재무 수집 — 2015~END_DATE"""
+    import OpenDartReader
     api_key = os.environ.get("DART_API_KEY", "")
     if not api_key:
         raise EnvironmentError("DART_API_KEY 환경변수 없음")
 
-    d = dart.OpenDartReader(api_key)
+    d = OpenDartReader(api_key)
+
+    # stock_code(6자리 종목코드) → corp_code(8자리 DART 코드) 매핑
+    corp_codes_df = d.corp_codes
+    code_map = corp_codes_df.dropna(subset=["stock_code"]).set_index("stock_code")["corp_code"].to_dict()
+
+    start_year = max(pd.Timestamp(start).year, 2015)
+    end_year   = pd.Timestamp(end).year
+
     rows = []
     for i, ticker in enumerate(tickers, 1):
-        try:
-            corp = d.corp_code(ticker)
-            for year in pd.date_range(start, end, freq="YE").year:
-                for q in [11011, 11012, 11013, 11014]:   # 1Q~4Q
-                    try:
-                        fs = d.finstate(corp, year, q)
-                        if fs is None or fs.empty:
-                            continue
-                        row = _parse_dart_fs(fs, ticker, year, q)
-                        if row:
-                            rows.append(row)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        if i % 50 == 0:
+        corp = code_map.get(ticker)
+        if not corp:
+            continue
+
+        for year in range(start_year, end_year + 1):
+            try:
+                # 11011 = 사업보고서(연간), CFS = 연결재무제표
+                fs = d.finstate_all(corp, year, reprt_code="11011", fs_div="CFS")
+                if fs is None or fs.empty:
+                    # 연결재무제표 없으면 별도재무제표 시도
+                    fs = d.finstate_all(corp, year, reprt_code="11011", fs_div="OFS")
+                if fs is None or fs.empty:
+                    continue
+                row = _parse_dart_fs(fs, ticker, year)
+                if row:
+                    rows.append(row)
+            except Exception:
+                pass
+            time.sleep(0.05)
+
+        if i % 10 == 0:
             print(f"  DART 재무: {i}/{len(tickers)}")
-        time.sleep(0.2)
+        time.sleep(0.15)
 
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+
+    # EPS + 당기순이익으로 주식수 추정
+    eps_mask = df["eps"].notna() & df["_net_income"].notna() & (df["eps"] != 0)
+    df.loc[eps_mask, "_shares"] = df.loc[eps_mask, "_net_income"] / df.loc[eps_mask, "eps"]
+
+    # BPS가 직접 있으면 자본총계 기반으로 재추정 (더 정확)
+    bps_mask = df["bps"].notna() & df["_total_equity"].notna() & (df["bps"] != 0)
+    df.loc[bps_mask, "_shares"] = df.loc[bps_mask, "_total_equity"] / df.loc[bps_mask, "bps"]
+
+    def _per_share(total_col):
+        return (df[total_col] / df["_shares"]).where(df["_shares"].notna() & (df["_shares"] > 0))
+
+    df["sps"]          = _per_share("_revenue")
+    df["ops"]          = _per_share("_op_income")
+    df["shares"]       = df["_shares"]
+    df["gross_profit"] = df["_gross_profit"]
+    df["total_assets"] = df["_total_assets"]
+
+    # BPS가 없으면 자본총계 / 주식수로 계산
+    no_bps = df["bps"].isna() & df["_total_equity"].notna() & df["_shares"].notna() & (df["_shares"] > 0)
+    df.loc[no_bps, "bps"] = df.loc[no_bps, "_total_equity"] / df.loc[no_bps, "_shares"]
+
+    keep = ["date", "ticker", "bps", "eps", "sps", "roe", "ops",
+            "shares", "gross_profit", "total_assets"]
+    return df[[c for c in keep if c in df.columns]]
 
 
-def _parse_dart_fs(fs: pd.DataFrame, ticker: str, year: int, q: int) -> dict | None:
-    """DART 재무제표에서 필요 항목 추출"""
-    def get_val(account: str) -> float:
-        row = fs[fs["account_nm"].str.contains(account, na=False)]
-        if row.empty:
-            return np.nan
-        try:
-            return float(str(row.iloc[0]["thstrm_amount"]).replace(",", ""))
-        except Exception:
-            return np.nan
+def _parse_dart_fs(fs: pd.DataFrame, ticker: str, year: int) -> dict | None:
+    """DART finstate_all 결과에서 주요 항목 추출 (금액 단위: 원)"""
+    def get(pattern: str, sj_divs=None) -> float:
+        mask = fs["account_nm"].str.contains(pattern, na=False, regex=False)
+        if sj_divs:
+            mask &= fs["sj_div"].isin(sj_divs)
+        for _, r in fs[mask].iterrows():
+            try:
+                val = str(r.get("thstrm_amount", "")).replace(",", "").strip()
+                if val and val not in ("-", ""):
+                    return float(val)
+            except Exception:
+                pass
+        return np.nan
 
-    quarter_map = {11011: "Q1", 11012: "H1", 11013: "Q3", 11014: "FY"}
+    # 손익계산서 항목 (IS)
+    revenue      = get("매출액", ["IS"])
+    if np.isnan(revenue):
+        revenue  = get("영업수익", ["IS"])       # 금융업/삼성전자 등 대체 계정명
+    op_income    = get("영업이익", ["IS"])
+    net_income   = get("당기순이익", ["IS", "CIS"])
+    gross_profit = get("매출총이익", ["IS"])
+
+    # 재무상태표 항목 (BS)
+    total_equity = get("자본총계", ["BS"])
+    total_assets = get("자산총계", ["BS"])
+
+    # 주당 항목 (IS 안에 포함됨)
+    bps = get("주당순자산", ["BS", "IS"])
+    eps = get("기본주당이익", ["IS"])
+    if np.isnan(eps):
+        eps = get("주당순이익", ["IS"])
+    if np.isnan(eps):
+        eps = get("주당이익", ["IS"])
+
+    # BPS가 없으면 자본총계로 나중에 계산
+    roe = (net_income / total_equity) if (
+        pd.notna(net_income) and pd.notna(total_equity) and total_equity != 0
+    ) else np.nan
+
     return {
-        "ticker":       ticker,
-        "year":         year,
-        "quarter":      quarter_map.get(q, ""),
-        "revenue":      get_val("매출"),
-        "gross_profit": get_val("매출총이익"),
-        "net_income":   get_val("당기순이익"),
-        "total_equity": get_val("자본총계"),
-        "total_assets": get_val("자산총계"),
+        "date":          pd.Timestamp(f"{year}-12-31"),
+        "ticker":        ticker,
+        "bps":           bps,
+        "eps":           eps,
+        "roe":           roe,
+        "_revenue":      revenue,
+        "_op_income":    op_income,
+        "_net_income":   net_income,
+        "_total_equity": total_equity,
+        "_total_assets": total_assets,
+        "_gross_profit": gross_profit,
     }
 
 
@@ -123,11 +195,15 @@ def _build_via_naver(tickers: list[str]) -> pd.DataFrame:
             col_name = all_cols[idx]
             try:
                 date = pd.Timestamp(col_name.replace(".", "-") + "-01") + pd.offsets.MonthEnd(0)
-                eps = t.iloc[9, idx]
-                bps = t.iloc[11, idx]
-                roe = t.iloc[5, idx]
-                rev = t.iloc[0, idx]  # 억원
-                sps = (float(rev) * 1e8 / shares) if shares and pd.notna(rev) else np.nan
+                eps  = t.iloc[9, idx]
+                bps  = t.iloc[11, idx]
+                roe  = t.iloc[5, idx]
+                rev  = t.iloc[0, idx]   # 억원
+                sps  = (float(rev) * 1e8 / shares) if shares and pd.notna(rev) else np.nan
+                # 영업이익 (row 1, 억원) → per share
+                op_raw = t.iloc[1, idx] if t.shape[0] > 1 else np.nan
+                op_total = float(op_raw) * 1e8 if pd.notna(op_raw) else np.nan
+                ops = op_total / shares if (shares and pd.notna(op_total)) else np.nan
                 rows.append({
                     "date":         date,
                     "ticker":       code,
@@ -135,6 +211,8 @@ def _build_via_naver(tickers: list[str]) -> pd.DataFrame:
                     "bps":          float(bps) if pd.notna(bps) else np.nan,
                     "roe":          float(roe) / 100 if pd.notna(roe) else np.nan,
                     "sps":          sps,
+                    "ops":          ops,
+                    "shares":       float(shares) if shares else np.nan,
                     "gross_profit": np.nan,
                     "total_assets": np.nan,
                 })

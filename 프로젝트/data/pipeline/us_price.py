@@ -25,6 +25,7 @@ def get_historical_sp500(dates: pd.DatetimeIndex) -> pd.DataFrame:
     """
     분기별 S&P 500 구성종목 이력 반환
     우선순위: (1) 사전 준비 CSV  (2) Wikipedia 현재 목록
+    CSV 형식: date, ticker  (ticker 컬럼은 콤마로 구분된 티커 문자열)
     """
     hist_csv = RAW_DIR / "sp500_historical.csv"
     if hist_csv.exists():
@@ -33,8 +34,10 @@ def get_historical_sp500(dates: pd.DatetimeIndex) -> pd.DataFrame:
         for d in dates:
             mask = hist["date"] <= d
             if mask.any():
-                latest = hist[mask].sort_values("date").groupby("ticker").last()
-                rows.extend([{"date": d, "ticker": t} for t in latest.index])
+                latest_row = hist[mask].sort_values("date").iloc[-1]
+                ticker_str = str(latest_row["ticker"])
+                tickers = [t.strip() for t in ticker_str.split(",") if t.strip()]
+                rows.extend([{"date": d, "ticker": t} for t in tickers])
         return pd.DataFrame(rows)
 
     # Wikipedia fallback
@@ -70,7 +73,7 @@ def download_prices(tickers: list[str],
     for i in range(0, len(tickers), batch):
         chunk = tickers[i : i + batch]
         raw = yf.download(chunk, start=start, end=end,
-                          auto_adjust=True, progress=False, threads=True)
+                          auto_adjust=True, progress=False, threads=False)
         if raw.empty:
             continue
         if isinstance(raw.columns, pd.MultiIndex):
@@ -115,3 +118,7 @@ def build(start: str = START_DATE, end: str = END_DATE) -> tuple[pd.DataFrame, p
 
     print(f"[us_price] 완료: {price_pivot.shape}")
     return price_pivot, universe_df
+
+
+if __name__ == "__main__":
+    build()
