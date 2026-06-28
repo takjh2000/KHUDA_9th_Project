@@ -1,116 +1,150 @@
-# KHUDA_9th_Project
+# KHUDA 9th Project — Quantitative Factor Backtesting
 
----
-# 펀더멘털 팩터 기반 롱숏 전략 백테스팅 (KR / US)
-
-KHUDA 금융트랙 프로젝트 — 한국·미국 주식시장에서 5개 펀더멘털 팩터의 롱숏 전략 성과를 비교 분석합니다.
+Fundamental factor long-short backtesting across Korean (KOSPI 200) and US (S&P 500) equity markets, with an extended analysis of 11 WorldQuant Brain-style strategies on the Korean market and hypothesis-driven strategy improvement.
 
 ---
 
-## 프로젝트 개요
-
-| 항목 | 내용 |
-|------|------|
-| 분석 기간 | 2010-01-01 ~ 2024-12-31 |
-| 대상 시장 | 한국 (KR), 미국 (US) |
-| 전략 | 팩터 상위 20% 롱 / 하위 20% 숏 (동일가중) |
-| 리밸런싱 | 분기말 (QE) |
-| 팩터 전처리 | 상하위 1% 윈소라이즈 → 횡단면 z-score |
-
----
-
-## 분석 팩터
-
-| 팩터 | 정의 | 의미 |
-|------|------|------|
-| **BP** | BPS / 주가 | 저평가 가치주 |
-| **EP** | EPS / 주가 | 수익성 대비 가격 |
-| **SP** | SPS / 주가 | 매출 대비 가격 |
-| **ROE** | 자기자본이익률 | 자본 효율성 |
-| **GPA** | 매출총이익 / 총자산 | 수익성 (Novy-Marx) |
-
----
-
-## 프로젝트 구조
+## Project Structure
 
 ```
-├── config.py              # 전역 설정 (기간, 팩터, 전략 파라미터)
-├── run_pipeline.py        # Phase 1: 데이터 수집 및 전처리
-├── run_backtest.py        # Phase 2~5: 팩터 계산 → 백테스트 → 시각화
+프로젝트/
+├── config.py                   # paths, dates, universe params
+├── run_pipeline.py             # Step 1: build all data
+├── run_backtest.py             # Step 2: 5-factor long-short backtest
+├── run_wq_all.py               # Step 3: 11 WQ Brain strategy backtest
+├── run_hypothesis_test.py      # Step 4: 11 hypothesis validation
 │
 ├── data/
-│   ├── pipeline/
-│   │   ├── kr_price.py    # 한국 가격 데이터
-│   │   ├── kr_finance.py  # 한국 재무 데이터
-│   │   ├── us_price.py    # 미국 가격 데이터
-│   │   └── us_finance.py  # 미국 재무 데이터
-│   ├── build_panel.py     # 재무+가격 패널 구성 (분기 → 일별 ffill)
-│   ├── raw/               # 원시 데이터 저장 경로
-│   └── processed/         # 전처리 완료 데이터 저장 경로
+│   ├── build_panel.py          # merge price + financials → panel parquet
+│   └── pipeline/
+│       ├── kr_price.py         # KOSPI 200 historical universe + prices (FDR/pykrx)
+│       ├── kr_finance.py       # KR financials (DART → pykrx → Naver fallback)
+│       ├── us_price.py         # S&P 500 historical universe + prices (yfinance)
+│       └── us_finance.py       # US financials (yfinance)
 │
 ├── factors/
-│   └── compute.py         # 팩터 계산 및 정규화
+│   ├── compute.py              # 5 classic factors: BP, EP, SP, ROE, GPA
+│   └── wq_ops.py               # WQ Brain ops: rank, zscore, ts_*, group_*, etc.
 │
 ├── backtest/
-│   ├── engine.py          # 롱숏 백테스터
-│   └── metrics.py         # CAGR, Sharpe Ratio, MDD 산출
+│   ├── engine.py               # LongShortBacktester (top/bottom 20%, QE rebalance)
+│   └── metrics.py              # CAGR, Sharpe, MDD
 │
 ├── analysis/
-│   └── compare.py         # KR vs US 비교 시각화, 연도별 히트맵, IC 분석
+│   └── compare.py              # KR vs US comparative charts
 │
-└── results/               # 차트 저장 경로
+└── sp500_historical.csv        # S&P 500 historical constituents (date, tickers)
 ```
+
 ---
 
-## 실행 방법
-
-### 1. 패키지 설치
+## Quickstart
 
 ```bash
-pip install pandas numpy scipy matplotlib pyarrow
+# 1. Install dependencies
+pip install FinanceDataReader yfinance pykrx pandas numpy matplotlib
 
-2. Phase 1 — 데이터 파이프라인
+# 2. Build data pipeline
+python run_pipeline.py          # KR + US
+python run_pipeline.py --kr     # KR only
+python run_pipeline.py --us     # US only
 
-# KR + US 전체
-python run_pipeline.py
+# 3-A. Classic 5-factor backtest
+python run_backtest.py --market KR --factor BP
+python run_backtest.py --market US --factor EP
 
-# 시장별 개별 실행
-python run_pipeline.py --kr
-python run_pipeline.py --us
+# 3-B. WQ Brain 11-strategy backtest (KR)
+python run_wq_all.py
+# → results/WQ_Brain_KR_종합분석_리포트.pdf
 
-3. Phase 2~5 — 백테스팅 및 분석
+# 3-C. Hypothesis validation (KR)
+python run_hypothesis_test.py
+# → results/WQ_가설검증_리포트.pdf
+```
 
-# KR + US 전체 (5개 팩터)
-python run_backtest.py
-
-# 시장 또는 팩터 지정
-python run_backtest.py --market KR
-python run_backtest.py --market US
-python run_backtest.py --factor BP
-
----
-출력 결과
-
-┌───────────────────────────────────┬────────────────────────────────┐
-│               파일                │              설명              │
-├───────────────────────────────────┼────────────────────────────────┤
-│ results/pnl_{MARKET}_{FACTOR}.png │ 팩터별 누적 수익률 + 낙폭 차트 │
-├───────────────────────────────────┼────────────────────────────────┤
-│ results/pnl_comparison.png        │ KR vs US 팩터별 PnL 비교       │
-├───────────────────────────────────┼────────────────────────────────┤
-│ results/heatmap_KR.png            │ KR 팩터 × 연도별 수익률 히트맵 │
-├───────────────────────────────────┼────────────────────────────────┤
-│ results/heatmap_US.png            │ US 팩터 × 연도별 수익률 히트맵 │
-└───────────────────────────────────┴────────────────────────────────┘
-
-콘솔에는 팩터 × 시장 10개 조합의 CAGR / Sharpe / MDD / Turnover 요약 테이블이 출력됩니다.
+> **Note:** KR financial data requires a DART API key for full coverage.
+> Set `DART_API_KEY` in your environment before running the pipeline.
+> Without it, the pipeline falls back to pykrx → Naver Finance automatically.
 
 ---
-주요 설계
 
-- 공시 지연 반영 — 미국 +60일, 한국 +45일 적용하여 look-ahead bias 방지
-- 상장폐지 처리 — 상폐 직전까지 수익률 반영 후 잔여 비중 균등 재배분
-- 유니버스 필터 — 재무 결측 3분기(≈63 거래일) 초과 종목 제거
-- IC 분석 — 팩터 IC(Spearman)와 개인투자자 순매수 비중 상관 분석 포함
+## Part 1 — Classic 5-Factor Backtest
+
+Long top 20% / Short bottom 20% with quarterly rebalancing (2010–2024).
+
+| Factor | Description |
+|--------|-------------|
+| **BP** | Book-to-Price — value |
+| **EP** | Earnings-to-Price — earnings yield |
+| **SP** | Sales-to-Price — revenue yield |
+| **ROE** | Return on Equity — capital efficiency |
+| **GPA** | Gross Profit-to-Assets — Novy-Marx profitability |
+
+Preprocessing: winsorize at 1% extremes → cross-sectional z-score normalization.
 
 ---
+
+## Part 2 — WQ Brain 11-Strategy Analysis (Korean Market)
+
+11 WorldQuant Brain-inspired alpha strategies backtested on KOSPI 200 (2016–2024).
+
+| # | Strategy | Signal Logic |
+|---|----------|-------------|
+| 1 | LowAccrual | `-(eps - ops) / bps`, size-neutralized |
+| 2 | OpIncEY | `ops / close`, industry-relative rank |
+| 5 | CFYield | `group_rank(ts_zscore(ops/close, 63), industry)` |
+| 6 | DebtSpike | `signed_power(-ts_zscore(debt_ps, 252), 4)` |
+| 7 | DualValue | `max(EBITDA_rank, PBR_rank)` + momentum neutralization |
+| 10 | Buyback | `-shares / delay(shares, 252)` × ROA quality filter |
+| 11 | SGAEfficiency | SGA ratio change × revenue growth condition |
+| 12 | Goodwill | `-ts_zscore(intangible_premium / sps, 63)` |
+| 14 | DebtDecay | `signed_power(-ts_zscore(debt_ps, 63), 1.8)`, low-vol regime only |
+| 15 | BookCapMom | equity/cap momentum (21d + 42d lag) |
+
+---
+
+## Part 3 — Hypothesis Testing
+
+11 hypotheses on why strategies underperform in the Korean market, each backtested against a baseline.
+
+| Group | Hypothesis | Key Finding |
+|-------|-----------|-------------|
+| A — Market Regime | A-1: P/B regime filter | Marginal MDD improvement |
+| | A-2: Small-cap stress filter | Stable CAGR, wider drawdown |
+| | A-3: IC adaptive filter | MDD −45% → −30% (Strat 2) |
+| B — Data Quality | B-1: Buyback profitability screen | Negative alpha deepens |
+| | B-2: Goodwill — exclude IT/Health proxy | Minimal effect (small universe) |
+| | B-3: Accrual — industry-relative rank | **+3.85% CAGR** (Strat 1: −2% → +2%) |
+| C — Signal Design | C-1: AND multi-factor (Strat 2 ∩ 5) | Lower CAGR, lower MDD |
+| | C-2: Debt strategy — exclude high-leverage | **+6.45% CAGR** (Strat 14: +1% → +7%) |
+| | C-3: OI seasonal smoothing (252d MA) | +0.32% CAGR |
+| D — Universe | D-1: Remove low-liquidity stocks | Destroys Strat 7 alpha (−10.6%) |
+| | D-2: Size split | Strat 7 alpha 100% in small-cap (+19.8%) |
+
+---
+
+## Data Sources
+
+| Data | Source | Fallback |
+|------|--------|----------|
+| KR prices | FinanceDataReader | — |
+| KR universe (KOSPI 200 history) | pykrx | FDR market-cap top 200 |
+| KR financials | DART (OpenDartReader) | pykrx → Naver Finance |
+| US prices | yfinance | — |
+| US universe (S&P 500 history) | `sp500_historical.csv` | Wikipedia current list |
+| US financials | yfinance | — |
+
+---
+
+## Key Configuration (`config.py`)
+
+```python
+START_DATE      = "2010-01-01"
+END_DATE        = "2024-12-31"
+LONG_PCT        = 0.20          # top 20% long
+SHORT_PCT       = 0.20          # bottom 20% short
+REBALANCE       = "QE"          # quarterly
+WINSORIZE_PCT   = 0.01
+US_FILING_LAG_DAYS = 60
+KR_FILING_LAG_DAYS = 0
+```
