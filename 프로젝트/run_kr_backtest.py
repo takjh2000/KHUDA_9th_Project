@@ -126,13 +126,73 @@ def load_kr():
         n_other = sum(1 for t in tickers_panel if sector_s.get(t, "Other") == "Other")
         print(f"  sector 보완 후 Other: {n_other}/{len(tickers_panel)}")
 
-    universe = None
-    uni_path = RAW_DIR / "kr_universe.parquet"
-    if uni_path.exists():
-        universe = pd.read_parquet(uni_path)
-        universe["date"] = pd.to_datetime(universe["date"])
+    # KOSPI200 proxy: 분기별 시가총액 상위 200종목
+    # pykrx KOSPI200 constituent API 불안정 → market cap으로 근사
+    kospi200_uni = _build_kospi200_proxy(panel, price_pivot, n=200)
+    print(f"  KOSPI200 proxy: 분기 {kospi200_uni['date'].nunique()}개, "
+          f"종목 {kospi200_uni['ticker'].nunique()}개")
 
-    return price_pivot, panel, universe, sector_s, industry_s, subindustry_s
+    return price_pivot, panel, kospi200_uni, sector_s, industry_s, subindustry_s
+
+
+def _build_kospi200_proxy(panel: pd.DataFrame,
+                           price_pivot: pd.DataFrame,
+                           n: int = 200) -> pd.DataFrame:
+    """시가총액 상위 n 종목을 분기별로 선정 → universe DataFrame 반환
+    market_cap = close × shares,  shares = equity / bps (연간 DART 기반)
+    """
+    # 시가총액 근사
+    # bps가 충분하면: market_cap = close × (equity/bps)
+    # bps 커버리지 부족하면: equity를 직접 proxy로 사용 (대형주=높은 equity)
+    tmp = panel[["date", "ticker"]].copy()
+
+    close_long = price_pivot.stack().rename("close").reset_index()
+    close_long.columns = ["date", "ticker", "close"]
+    tmp = tmp.merge(close_long, on=["date", "ticker"], how="left")
+
+    if "equity" in panel.columns and "bps" in panel.columns:
+        bps_nonzero = panel["bps"].replace(0, np.nan)
+        shares = panel["equity"] / bps_nonzero
+        cap_from_bps = tmp["close"] * shares.values
+        # bps coverage check
+        if bps_nonzero.notna().mean() >= 0.3:
+            tmp["market_cap"] = cap_from_bps
+        else:
+            # bps coverage too low → use equity as proxy (forward-filled)
+            tmp["market_cap"] = panel["equity"].values
+    elif "equity" in panel.columns:
+        tmp["market_cap"] = panel["equity"].values
+    else:
+        tmp["market_cap"] = tmp["close"]  # last resort: price
+
+    # 분기별 마지막 거래일 (resample로 정확하게)
+    dates = price_pivot.index
+    dummy = pd.Series(0, index=dates)
+    quarter_ends = dummy.resample("Q").apply(lambda x: x.index[-1] if len(x) > 0 else None).dropna()
+
+    rows = []
+    for qd in quarter_ends.values:
+        sub = tmp[tmp["date"] == qd][["ticker", "market_cap"]].dropna()
+        if len(sub) == 0:
+            # 분기 말 거래일 없으면 직전 20거래일 내 가장 가까운 날
+            near = tmp[(tmp["date"] <= qd) & (tmp["date"] >= qd - pd.Timedelta(days=30))]
+            near = near.sort_values("date").groupby("ticker").last().reset_index()
+            sub  = near[["ticker", "market_cap"]].dropna()
+        top_n = sub.nlargest(n, "market_cap")["ticker"].tolist()
+        for t in top_n:
+            rows.append({"date": qd, "ticker": t})
+
+    if not rows:
+        # fallback: 전체 panel ticker 그대로
+        tickers = panel["ticker"].unique()
+        dates_q = price_pivot.index[price_pivot.index.is_quarter_end]
+        for qd in dates_q:
+            for t in tickers:
+                rows.append({"date": qd, "ticker": t})
+
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"])
+    return df
 
 
 def to_pivot(panel, col):
