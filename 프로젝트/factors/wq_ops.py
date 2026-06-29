@@ -153,3 +153,84 @@ def trade_when(condition: pd.DataFrame, signal: pd.DataFrame,
     else:
         alt = otherwise
     return signal.where(condition, other=alt)
+
+
+def ts_sum(df: pd.DataFrame, n: int) -> pd.DataFrame:
+    return df.rolling(n, min_periods=max(1, n // 2)).sum()
+
+
+def ts_min(df: pd.DataFrame, n: int) -> pd.DataFrame:
+    return df.rolling(n, min_periods=max(1, n // 2)).min()
+
+
+def ts_max(df: pd.DataFrame, n: int) -> pd.DataFrame:
+    return df.rolling(n, min_periods=max(1, n // 2)).max()
+
+
+def decay_linear(df: pd.DataFrame, n: int) -> pd.DataFrame:
+    """WQ Brain Decay: 선형 가중 이동평균 (최근=높은 가중치)
+    decay=n → weights = [n, n-1, ..., 1], 합계 = n*(n+1)/2
+    포지션을 부드럽게 전환 → 턴오버 감소
+    """
+    if n <= 1:
+        return df
+    weights = list(range(1, n + 1))  # [1, 2, ..., n]
+    w_sum = sum(weights)
+
+    def _wma(col):
+        return col.rolling(n, min_periods=1).apply(
+            lambda x: sum(w * v for w, v in zip(weights[-len(x):], x)) / sum(weights[-len(x):]),
+            raw=True,
+        )
+
+    return df.apply(_wma)
+
+
+def truncate(df: pd.DataFrame, pct: float) -> pd.DataFrame:
+    """단일 종목 최대 비중 제한용 signal clipping
+    cross-sectional 절대값 기준으로 pct 수준에서 winsorize
+    """
+    upper = df.abs().quantile(1 - pct, axis=1)
+    lower = -upper
+    return df.clip(lower=lower, upper=upper, axis=0)
+
+
+def hump(df: pd.DataFrame, h: float) -> pd.DataFrame:
+    """신호 변화가 h 미만이면 이전 포지션 유지 (dead-band 필터)
+    첫 유효값부터 시작 — 초기 NaN 전파 버그 방지
+    """
+    result = df.copy()
+    has_any = df.notna().any(axis=1)
+    if not has_any.any():
+        return result
+    first_idx = has_any.argmax()
+    prev = df.iloc[first_idx].copy()
+    for i in range(first_idx + 1, len(df)):
+        curr = df.iloc[i]
+        new_val = prev.copy()
+        new_curr = curr.notna()
+        new_prev = prev.notna()
+        both = new_curr & new_prev
+        change = (curr - prev).abs()
+        new_val[both & (change >= h)] = curr[both & (change >= h)]
+        new_val[new_curr & ~new_prev] = curr[new_curr & ~new_prev]
+        result.iloc[i] = new_val
+        prev = new_val.copy()
+    return result
+
+
+def ts_regression_slope(df: pd.DataFrame, n: int) -> pd.DataFrame:
+    """rolling OLS slope (시간 대비 회귀계수) — ts_regression rettype=2
+    n일 window에서 df vs time index의 기울기
+    """
+    x = np.arange(n, dtype=float)
+    x -= x.mean()
+
+    def _slope(col):
+        return col.rolling(n, min_periods=n // 2).apply(
+            lambda y: np.dot(x[-len(y):] - x[-len(y):].mean(), y - y.mean())
+            / (np.dot(x[-len(y):] - x[-len(y):].mean(), x[-len(y):] - x[-len(y):].mean()) + 1e-12),
+            raw=True,
+        )
+
+    return df.apply(_slope)

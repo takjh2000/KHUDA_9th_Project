@@ -18,9 +18,11 @@ from config import LONG_PCT, SHORT_PCT, REBALANCE
 
 @dataclass
 class Config:
-    long_pct:  float = LONG_PCT
-    short_pct: float = SHORT_PCT
-    rebalance: str   = REBALANCE   # "QE" = 분기말
+    long_pct:    float = LONG_PCT
+    short_pct:   float = SHORT_PCT
+    rebalance:   str   = REBALANCE   # "QE" = 분기말
+    truncation:  float = 0.10        # 종목당 최대 비중 (0=제한없음)
+    score_weight: bool = True        # True=팩터점수 비중, False=동일가중
 
 
 class LongShortBacktester:
@@ -91,6 +93,29 @@ class LongShortBacktester:
         valid = [t for t in universe if t in f.index and t in p.index and pd.notna(f[t])]
         return f[valid]
 
+    def _compute_weights(self, scores: pd.Series, reverse: bool) -> pd.Series:
+        """팩터 점수 비중 계산 + truncation 적용"""
+        if not self.cfg.score_weight or scores.empty:
+            w = pd.Series(1.0 / len(scores), index=scores.index)
+        else:
+            # 절대값 기반 비중 (숏은 절대값 사용)
+            vals = scores.abs() if reverse else scores
+            vals = vals.clip(lower=0)
+            total = vals.sum()
+            w = vals / total if total > 0 else pd.Series(1.0 / len(scores), index=scores.index)
+
+        # truncation: 종목당 최대 비중 cap
+        if self.cfg.truncation > 0:
+            cap = self.cfg.truncation
+            for _ in range(20):  # iterative renormalization
+                excess = (w - cap).clip(lower=0)
+                if excess.sum() < 1e-9:
+                    break
+                w = w.clip(upper=cap)
+                w = w / w.sum()
+
+        return w
+
     # ── 메인 실행 ────────────────────────────────────────────────────────
 
     def run(self) -> BacktestResult:
@@ -114,6 +139,10 @@ class LongShortBacktester:
             long_idx  = ranked.iloc[:n_long].index
             short_idx = ranked.iloc[-n_short:].index
 
+            # 비중 계산 (factor-score weighted or equal weight)
+            long_w  = self._compute_weights(f[long_idx],  reverse=False)
+            short_w = self._compute_weights(f[short_idx], reverse=True)
+
             # 턴오버: 변경된 종목 비율
             if len(prev_long):
                 changed = len(set(long_idx) - set(prev_long)) / n_long
@@ -136,12 +165,21 @@ class LongShortBacktester:
             rets = period.pct_change().fillna(0).iloc[1:]
 
             for date, row in rets.iterrows():
-                # 상장폐지: 가격이 있는 종목만 유지, 나머지 균등 재배분
+                # 상장폐지: 가격이 있는 종목만 유지
                 l_avail = [t for t in long_idx  if t in row.index and not pd.isna(period.loc[date, t])]
                 s_avail = [t for t in short_idx if t in row.index and not pd.isna(period.loc[date, t])]
 
-                l_ret = row[l_avail].mean() if l_avail else 0.0
-                s_ret = row[s_avail].mean() if s_avail else 0.0
+                if l_avail:
+                    w = long_w[l_avail] / long_w[l_avail].sum()
+                    l_ret = float((row[l_avail] * w).sum())
+                else:
+                    l_ret = 0.0
+
+                if s_avail:
+                    w = short_w[s_avail] / short_w[s_avail].sum()
+                    s_ret = float((row[s_avail] * w).sum())
+                else:
+                    s_ret = 0.0
 
                 all_daily.append({
                     "date":      date,
