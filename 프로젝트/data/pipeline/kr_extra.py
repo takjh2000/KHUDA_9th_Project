@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore")
 
 from config import RAW_DIR, START_DATE, END_DATE, KR_FILING_LAG_DAYS
 
-DART_KEY = "86e09bb1fc58dcbbef296479044ebdfe7ff0c29f"
+DART_KEY = os.environ.get("DART_API_KEY", "")
 
 # ── KSIC 대분류 → GICS 스타일 Sector 매핑 ──────────────────────────────────
 KSIC_SECTION_TO_SECTOR = {
