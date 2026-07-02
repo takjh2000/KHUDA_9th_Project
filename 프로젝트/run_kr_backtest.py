@@ -78,6 +78,21 @@ def load_kr():
             ).replace(0, np.nan)
             print(f"  gross_profit 파생 후: {panel['gross_profit'].notna().mean():.0%}")
 
+    # KOSPI200 point-in-time 유니버스로 필터링
+    # (그날 실제로 KOSPI200에 속했던 종목만 남김 → 이후 rank/zscore 등
+    #  횡단면 연산이 전체 패널이 아니라 그날의 200종목 안에서만 계산됨)
+    uni_path = RAW_DIR / "kr_universe.parquet"
+    universe = None
+    if uni_path.exists():
+        universe = pd.read_parquet(uni_path)
+        universe["date"] = pd.to_datetime(universe["date"])
+        before_rows = len(panel)
+        before_dates = panel["date"].nunique()
+        panel = panel.merge(universe.assign(_in_uni=True), on=["date", "ticker"], how="inner")
+        panel = panel.drop(columns=["_in_uni"])
+        print(f"  KOSPI200 마스크 적용: {before_rows:,}행 → {len(panel):,}행 "
+              f"({before_dates}일 → {panel['date'].nunique()}일)")
+
     price_pivot = panel.pivot_table(index="date", columns="ticker", values="close").sort_index()
 
     # 섹터 계층 로드 + industry 키워드로 Other 보완
@@ -125,12 +140,6 @@ def load_kr():
         tickers_panel = panel["ticker"].unique()
         n_other = sum(1 for t in tickers_panel if sector_s.get(t, "Other") == "Other")
         print(f"  sector 보완 후 Other: {n_other}/{len(tickers_panel)}")
-
-    universe = None
-    uni_path = RAW_DIR / "kr_universe.parquet"
-    if uni_path.exists():
-        universe = pd.read_parquet(uni_path)
-        universe["date"] = pd.to_datetime(universe["date"])
 
     return price_pivot, panel, universe, sector_s, industry_s, subindustry_s
 

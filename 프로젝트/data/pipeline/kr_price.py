@@ -57,13 +57,15 @@ def _fetch_kospi200_at(date: pd.Timestamp) -> list[str]:
     """특정 날짜의 코스피200 구성종목 반환"""
     d_str = date.strftime("%Y%m%d")
 
-    # 1순위: pykrx 과거 구성종목
+    # 1순위: pykrx 과거 구성종목 (버전에 따라 DataFrame 또는 list 반환)
     try:
         from pykrx import stock as krx
-        df = krx.get_index_portfolio_deposit_file("1028", d_str)
-        if hasattr(df, "empty") and not df.empty:
-            col = "티커" if "티커" in df.columns else df.columns[0]
-            return df[col].tolist()
+        result = krx.get_index_portfolio_deposit_file("1028", d_str)
+        if isinstance(result, pd.DataFrame) and not result.empty:
+            col = "티커" if "티커" in result.columns else result.columns[0]
+            return result[col].tolist()
+        if isinstance(result, list) and len(result) > 0:
+            return result
     except Exception:
         pass
 
@@ -109,11 +111,28 @@ def download_prices(tickers: list[str],
     return panel.sort_index()
 
 
+def _get_trading_dates(start: str, end: str) -> pd.DatetimeIndex:
+    """실제 KRX 거래일 목록 (KOSPI200 지수 OHLCV 기준). 실패 시 영업일로 대체."""
+    try:
+        from pykrx import stock as krx
+        df = krx.get_index_ohlcv_by_date(
+            pd.Timestamp(start).strftime("%Y%m%d"),
+            pd.Timestamp(end).strftime("%Y%m%d"),
+            "1028",
+        )
+        if not df.empty:
+            return pd.DatetimeIndex(df.index)
+    except Exception:
+        pass
+    print("  [경고] 실제 거래일 조회 실패 → 영업일(주말 제외)로 대체")
+    return pd.bdate_range(start, end)
+
+
 # ── 메인 ────────────────────────────────────────────────────────────────────
 
 def build(start: str = START_DATE, end: str = END_DATE) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    코스피200 가격 패널 + 분기별 유니버스 구성
+    코스피200 가격 패널 + 일별 유니버스 구성 (매 거래일 point-in-time)
     반환: (price_pivot, universe_df)
     """
     price_path   = RAW_DIR / "kr_price.parquet"
@@ -125,10 +144,10 @@ def build(start: str = START_DATE, end: str = END_DATE) -> tuple[pd.DataFrame, p
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 분기말 날짜 목록
-    quarter_dates = pd.date_range(start, end, freq="QE")
-    print(f"[kr_price] {len(quarter_dates)}개 분기 유니버스 조회 중...")
-    universe_df = get_historical_kospi200(quarter_dates)
+    # 거래일 목록 (분기말이 아니라 매 거래일 — 편입/편출을 그날그날 반영)
+    trading_dates = _get_trading_dates(start, end)
+    print(f"[kr_price] {len(trading_dates)}개 거래일 유니버스 조회 중...")
+    universe_df = get_historical_kospi200(trading_dates)
 
     if universe_df.empty or "ticker" not in universe_df.columns:
         print("[kr_price] 오류: 유니버스 데이터를 가져오지 못했습니다.")

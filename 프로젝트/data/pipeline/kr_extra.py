@@ -205,7 +205,8 @@ def build_sector_hierarchy(tickers: list[str]) -> pd.DataFrame:
 def _parse_extra(fs: pd.DataFrame, ticker: str, year: int) -> dict:
     """DART finstate_all에서 추가 항목 추출"""
     def get(pattern: str, sj_divs=None) -> float:
-        mask = fs["account_nm"].str.contains(pattern, na=False, regex=False)
+        names = fs["account_nm"].str.replace(" ", "", regex=False)
+        mask = names.str.contains(pattern.replace(" ", ""), na=False, regex=False)
         if sj_divs:
             mask &= fs["sj_div"].isin(sj_divs)
         for _, r in fs[mask].iterrows():
@@ -217,8 +218,8 @@ def _parse_extra(fs: pd.DataFrame, ticker: str, year: int) -> dict:
                 pass
         return np.nan
 
-    operating_income = get("영업이익", ["IS"])
-    sga_expense      = get("판매비와관리비", ["IS"])
+    operating_income = get("영업이익", ["IS", "CIS"])
+    sga_expense      = get("판매비와관리비", ["IS", "CIS"])
     equity           = get("자본총계", ["BS"])
     total_debt       = get("부채총계", ["BS"])
     goodwill         = get("영업권", ["BS"])

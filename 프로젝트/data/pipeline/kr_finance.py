@@ -25,7 +25,7 @@ from config import RAW_DIR, START_DATE, END_DATE, KR_FILING_LAG_DAYS
 
 def _build_via_dart(tickers: list[str], start: str, end: str) -> pd.DataFrame:
     """OpenDartReader로 연간(FY) 재무 수집 — 2015~END_DATE"""
-    import OpenDartReader
+    from opendartreader import OpenDartReader
     api_key = os.environ.get("DART_API_KEY", "")
     if not api_key:
         raise EnvironmentError("DART_API_KEY 환경변수 없음")
@@ -99,7 +99,8 @@ def _build_via_dart(tickers: list[str], start: str, end: str) -> pd.DataFrame:
 def _parse_dart_fs(fs: pd.DataFrame, ticker: str, year: int) -> dict | None:
     """DART finstate_all 결과에서 주요 항목 추출 (금액 단위: 원)"""
     def get(pattern: str, sj_divs=None) -> float:
-        mask = fs["account_nm"].str.contains(pattern, na=False, regex=False)
+        names = fs["account_nm"].str.replace(" ", "", regex=False)
+        mask = names.str.contains(pattern.replace(" ", ""), na=False, regex=False)
         if sj_divs:
             mask &= fs["sj_div"].isin(sj_divs)
         for _, r in fs[mask].iterrows():
@@ -111,25 +112,25 @@ def _parse_dart_fs(fs: pd.DataFrame, ticker: str, year: int) -> dict | None:
                 pass
         return np.nan
 
-    # 손익계산서 항목 (IS)
-    revenue      = get("매출액", ["IS"])
+    # 손익계산서 항목 (IS 또는 CIS — 회사에 따라 포괄손익계산서로 태깅됨)
+    revenue      = get("매출액", ["IS", "CIS"])
     if np.isnan(revenue):
-        revenue  = get("영업수익", ["IS"])       # 금융업/삼성전자 등 대체 계정명
-    op_income    = get("영업이익", ["IS"])
+        revenue  = get("영업수익", ["IS", "CIS"])       # 금융업/삼성전자 등 대체 계정명
+    op_income    = get("영업이익", ["IS", "CIS"])
     net_income   = get("당기순이익", ["IS", "CIS"])
-    gross_profit = get("매출총이익", ["IS"])
+    gross_profit = get("매출총이익", ["IS", "CIS"])
 
     # 재무상태표 항목 (BS)
     total_equity = get("자본총계", ["BS"])
     total_assets = get("자산총계", ["BS"])
 
-    # 주당 항목 (IS 안에 포함됨)
-    bps = get("주당순자산", ["BS", "IS"])
-    eps = get("기본주당이익", ["IS"])
+    # 주당 항목 (IS 또는 CIS 안에 포함됨)
+    bps = get("주당순자산", ["BS", "IS", "CIS"])
+    eps = get("기본주당이익", ["IS", "CIS"])
     if np.isnan(eps):
-        eps = get("주당순이익", ["IS"])
+        eps = get("주당순이익", ["IS", "CIS"])
     if np.isnan(eps):
-        eps = get("주당이익", ["IS"])
+        eps = get("주당이익", ["IS", "CIS"])
 
     # BPS가 없으면 자본총계로 나중에 계산
     roe = (net_income / total_equity) if (
