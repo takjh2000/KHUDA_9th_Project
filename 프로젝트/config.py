@@ -1,6 +1,8 @@
 from pathlib import Path
+from dotenv import load_dotenv
 
 BASE_DIR      = Path(__file__).parent
+load_dotenv(BASE_DIR / ".env")
 DATA_DIR      = BASE_DIR / "data"
 RAW_DIR       = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
@@ -17,7 +19,7 @@ MARKETS = ["KR", "US"]
 # ── 전략 ──────────────────────────────────────────────────────────────────
 LONG_PCT      = 0.20        # 상위 20% 롱
 SHORT_PCT     = 0.20        # 하위 20% 숏
-REBALANCE     = "QE"        # 분기말 리밸런싱
+REBALANCE     = "B"         # 매일(영업일) 리밸런싱
 
 # ── 팩터 전처리 ───────────────────────────────────────────────────────────
 WINSORIZE_PCT = 0.01        # 상하위 1% 윈소라이즈
