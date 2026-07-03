@@ -217,18 +217,36 @@ def _parse_extra(fs: pd.DataFrame, ticker: str, year: int) -> dict:
                 pass
         return np.nan
 
-    operating_income = get("영업이익", ["IS"])
-    sga_expense      = get("판매비와관리비", ["IS"])
-    equity           = get("자본총계", ["BS"])
-    total_debt       = get("부채총계", ["BS"])
-    goodwill         = get("영업권", ["BS"])
-    if np.isnan(goodwill):
-        goodwill     = get("무형자산", ["BS"])  # 영업권 없으면 무형자산
+    # 영업이익
+    for oi_nm in ["영업이익", "영업손익"]:
+        operating_income = get(oi_nm, ["IS"])
+        if not np.isnan(operating_income):
+            break
 
-    # 현금흐름표
-    cashflow_op = get("영업활동현금흐름", ["CF"])
-    if np.isnan(cashflow_op):
-        cashflow_op = get("영업활동으로인한현금흐름", ["CF"])
+    # 판매비와관리비 — 표기가 회사마다 상이
+    for sga_nm in ["판매비와관리비", "판매비와 관리비", "판관비", "판매관리비"]:
+        sga_expense = get(sga_nm, ["IS"])
+        if not np.isnan(sga_expense):
+            break
+
+    equity     = get("자본총계", ["BS"])
+    total_debt = get("부채총계", ["BS"])
+
+    goodwill = get("영업권", ["BS"])
+    if np.isnan(goodwill):
+        goodwill = get("무형자산", ["BS"])
+
+    # 영업활동현금흐름 — 표기가 회사·기준마다 상이
+    for cf_nm in [
+        "영업활동현금흐름",
+        "영업활동으로인한현금흐름",
+        "영업활동으로 인한 현금흐름",
+        "영업에서창출된현금",
+        "영업활동",
+    ]:
+        cashflow_op = get(cf_nm, ["CF"])
+        if not np.isnan(cashflow_op):
+            break
 
     return {
         "date":             pd.Timestamp(f"{year}-12-31"),

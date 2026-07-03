@@ -124,6 +124,8 @@ class LongShortBacktester:
         all_turnover = []
         prev_long  = pd.Index([])
         prev_short = pd.Index([])
+        prev_long_w_full  = None
+        prev_short_w_full = None
 
         for i, rb in enumerate(rebal_dates):
             uni = self._get_universe_at(rb)
@@ -143,11 +145,21 @@ class LongShortBacktester:
             long_w  = self._compute_weights(f[long_idx],  reverse=False)
             short_w = self._compute_weights(f[short_idx], reverse=True)
 
-            # 턴오버: 변경된 종목 비율
-            if len(prev_long):
-                changed = len(set(long_idx) - set(prev_long)) / n_long
-                all_turnover.append({"date": rb, "turnover": changed})
-            prev_long, prev_short = long_idx, short_idx
+            # WQ Brain weight-based turnover: (1/2) × Σ|w_new - w_old|
+            all_tickers = self.price.columns
+            new_long_w_full  = pd.Series(0.0, index=all_tickers)
+            new_short_w_full = pd.Series(0.0, index=all_tickers)
+            new_long_w_full.update(long_w)
+            new_short_w_full.update(short_w)
+
+            if prev_long_w_full is not None:
+                dl = (new_long_w_full  - prev_long_w_full).abs().sum()
+                ds = (new_short_w_full - prev_short_w_full).abs().sum()
+                all_turnover.append({"date": rb, "turnover": 0.5 * (dl + ds)})
+
+            prev_long, prev_short     = long_idx, short_idx
+            prev_long_w_full  = new_long_w_full
+            prev_short_w_full = new_short_w_full
 
             # 보유 기간 결정
             next_rb = (
@@ -217,4 +229,14 @@ class BacktestResult:
 
     @property
     def avg_turnover(self) -> float:
+        """리밸런싱 주기당 평균 weight 거래회전율"""
         return self.turn_df["turnover"].mean() if not self.turn_df.empty else np.nan
+
+    @property
+    def daily_turnover(self) -> float:
+        """평균 일일 거래회전율 (총 거래량 / 총 거래일수) — WQ Brain 스타일
+        Turnover_t = (1/2) × Σ|w_i,t - w_i,t-1|  →  일별 평균
+        """
+        if self.turn_df.empty or len(self.ret_df) == 0:
+            return np.nan
+        return self.turn_df["turnover"].sum() / len(self.ret_df)

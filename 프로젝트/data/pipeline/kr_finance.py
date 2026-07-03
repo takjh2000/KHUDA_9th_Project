@@ -20,15 +20,18 @@ warnings.filterwarnings("ignore")
 
 from config import RAW_DIR, START_DATE, END_DATE, KR_FILING_LAG_DAYS
 
+# kr_extra.py와 공유하는 DART API 키 (환경변수 없을 때 fallback)
+_DART_KEY_FALLBACK = "86e09bb1fc58dcbbef296479044ebdfe7ff0c29f"
+
 
 # ── OpenDartReader 경로 ────────────────────────────────────────────────────
 
 def _build_via_dart(tickers: list[str], start: str, end: str) -> pd.DataFrame:
     """OpenDartReader로 연간(FY) 재무 수집 — 2015~END_DATE"""
     import OpenDartReader
-    api_key = os.environ.get("DART_API_KEY", "")
+    api_key = os.environ.get("DART_API_KEY", "") or _DART_KEY_FALLBACK
     if not api_key:
-        raise EnvironmentError("DART_API_KEY 환경변수 없음")
+        raise EnvironmentError("DART_API_KEY 없음")
 
     d = OpenDartReader(api_key)
 
@@ -70,13 +73,21 @@ def _build_via_dart(tickers: list[str], start: str, end: str) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
 
-    # EPS + 당기순이익으로 주식수 추정
-    eps_mask = df["eps"].notna() & df["_net_income"].notna() & (df["eps"] != 0)
-    df.loc[eps_mask, "_shares"] = df.loc[eps_mask, "_net_income"] / df.loc[eps_mask, "eps"]
+    df["_shares"] = np.nan
 
-    # BPS가 직접 있으면 자본총계 기반으로 재추정 (더 정확)
-    bps_mask = df["bps"].notna() & df["_total_equity"].notna() & (df["bps"] != 0)
-    df.loc[bps_mask, "_shares"] = df.loc[bps_mask, "_total_equity"] / df.loc[bps_mask, "bps"]
+    # 1순위: DART에서 직접 파싱한 발행주식수
+    if "_issued_shares" in df.columns:
+        issued_ok = df["_issued_shares"].notna() & (df["_issued_shares"] > 0)
+        df.loc[issued_ok, "_shares"] = df.loc[issued_ok, "_issued_shares"]
+
+    # 2순위: EPS + 당기순이익으로 주식수 역산
+    eps_ok = (df["_shares"].isna() & df["eps"].notna()
+              & df["_net_income"].notna() & (df["eps"] != 0))
+    df.loc[eps_ok, "_shares"] = df.loc[eps_ok, "_net_income"] / df.loc[eps_ok, "eps"]
+
+    # 3순위: BPS + 자본총계로 주식수 역산 (더 정확)
+    bps_ok = (df["bps"].notna() & df["_total_equity"].notna() & (df["bps"] != 0))
+    df.loc[bps_ok, "_shares"] = df.loc[bps_ok, "_total_equity"] / df.loc[bps_ok, "bps"]
 
     def _per_share(total_col):
         return (df[total_col] / df["_shares"]).where(df["_shares"].notna() & (df["_shares"] > 0))
@@ -87,9 +98,13 @@ def _build_via_dart(tickers: list[str], start: str, end: str) -> pd.DataFrame:
     df["gross_profit"] = df["_gross_profit"]
     df["total_assets"] = df["_total_assets"]
 
-    # BPS가 없으면 자본총계 / 주식수로 계산
+    # BPS 없으면 자본총계/주식수로 파생
     no_bps = df["bps"].isna() & df["_total_equity"].notna() & df["_shares"].notna() & (df["_shares"] > 0)
     df.loc[no_bps, "bps"] = df.loc[no_bps, "_total_equity"] / df.loc[no_bps, "_shares"]
+
+    # EPS 없으면 당기순이익/주식수로 파생
+    no_eps = df["eps"].isna() & df["_net_income"].notna() & df["_shares"].notna() & (df["_shares"] > 0)
+    df.loc[no_eps, "eps"] = df.loc[no_eps, "_net_income"] / df.loc[no_eps, "_shares"]
 
     keep = ["date", "ticker", "bps", "eps", "sps", "roe", "ops",
             "shares", "gross_profit", "total_assets"]
@@ -123,13 +138,23 @@ def _parse_dart_fs(fs: pd.DataFrame, ticker: str, year: int) -> dict | None:
     total_equity = get("자본총계", ["BS"])
     total_assets = get("자산총계", ["BS"])
 
-    # 주당 항목 (IS 안에 포함됨)
-    bps = get("주당순자산", ["BS", "IS"])
-    eps = get("기본주당이익", ["IS"])
-    if np.isnan(eps):
-        eps = get("주당순이익", ["IS"])
-    if np.isnan(eps):
-        eps = get("주당이익", ["IS"])
+    # 주당 항목 — IS·CIS 모두 검색, 다양한 계정명 시도
+    for bps_nm in ["주당순자산", "1주당순자산", "주당 순자산"]:
+        bps = get(bps_nm, ["BS", "IS", "CIS"])
+        if not np.isnan(bps):
+            break
+
+    for eps_nm in ["기본주당이익", "기본주당순이익", "주당순이익", "주당이익", "1주당순이익"]:
+        eps = get(eps_nm, ["IS", "CIS"])
+        if not np.isnan(eps):
+            break
+
+    # 발행주식수 직접 파싱 — EPS/BPS 파생에 사용
+    issued_shares = np.nan
+    for sh_nm in ["보통주발행주식수", "발행주식수", "주식수", "유통주식수"]:
+        issued_shares = get(sh_nm, None)   # sj_div 무관하게 검색
+        if not np.isnan(issued_shares):
+            break
 
     # BPS가 없으면 자본총계로 나중에 계산
     roe = (net_income / total_equity) if (
@@ -137,17 +162,18 @@ def _parse_dart_fs(fs: pd.DataFrame, ticker: str, year: int) -> dict | None:
     ) else np.nan
 
     return {
-        "date":          pd.Timestamp(f"{year}-12-31"),
-        "ticker":        ticker,
-        "bps":           bps,
-        "eps":           eps,
-        "roe":           roe,
-        "_revenue":      revenue,
-        "_op_income":    op_income,
-        "_net_income":   net_income,
-        "_total_equity": total_equity,
-        "_total_assets": total_assets,
-        "_gross_profit": gross_profit,
+        "date":             pd.Timestamp(f"{year}-12-31"),
+        "ticker":           ticker,
+        "bps":              bps,
+        "eps":              eps,
+        "roe":              roe,
+        "_revenue":         revenue,
+        "_op_income":       op_income,
+        "_net_income":      net_income,
+        "_total_equity":    total_equity,
+        "_total_assets":    total_assets,
+        "_gross_profit":    gross_profit,
+        "_issued_shares":   issued_shares,
     }
 
 
@@ -265,6 +291,41 @@ def _build_via_pykrx(tickers: list[str], start: str, end: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+# ── DART 재조회로 BPS/EPS 보완 ──────────────────────────────────────────────
+
+def _fill_bps_eps_via_dart(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
+    """BPS/EPS NaN 종목을 DART API 재조회 + 개선된 파싱으로 채우기"""
+    nan_tickers = df[df["bps"].isna() | df["eps"].isna()]["ticker"].unique().tolist()
+    if not nan_tickers:
+        return df
+
+    print(f"  DART 재조회 대상: {len(nan_tickers)}개 종목 (BPS/EPS NaN)")
+    new_data = _build_via_dart(nan_tickers, start, end)
+    if new_data.empty:
+        return df
+
+    # df는 lag 적용 후 날짜, new_data는 12-31(lag 전) → lag 제거 후 회계연도로 매칭
+    df = df.copy()
+    df["_year"] = (pd.to_datetime(df["date"]) - pd.Timedelta(days=KR_FILING_LAG_DAYS)).dt.year
+    new_data = new_data.copy()
+    new_data["_year"] = pd.to_datetime(new_data["date"]).dt.year
+
+    for col in ["bps", "eps"]:
+        if col not in new_data.columns:
+            continue
+        ann = (
+            new_data[new_data[col].notna()][["ticker", "_year", col]]
+            .rename(columns={col: f"_{col}_new"})
+        )
+        merged = df.merge(ann, on=["ticker", "_year"], how="left")
+        df[col] = df[col].combine_first(merged[f"_{col}_new"])
+
+    df = df.drop(columns=["_year"])
+    after_nn = df["bps"].notna().mean()
+    print(f"  DART 재조회 후 BPS non-null: {after_nn:.1%}")
+    return df
+
+
 # ── 메인 ────────────────────────────────────────────────────────────────────
 
 def build(tickers: list[str],
@@ -275,44 +336,98 @@ def build(tickers: list[str],
     반환: DataFrame — 컬럼: date(사용가능일), ticker, bps, eps, sps, roe, gross_profit, total_assets
     """
     save_path = RAW_DIR / "kr_finance.parquet"
+
+    # 기존 캐시 로드 후 누락 종목만 보완
+    existing_df = pd.DataFrame()
+    tickers_to_fetch = list(tickers)
+
     if save_path.exists():
-        print("[kr_finance] 캐시 로드")
-        return pd.read_parquet(save_path)
+        existing_df = pd.read_parquet(save_path)
+        cached_tickers = set(existing_df["ticker"].unique())
+        tickers_to_fetch = [t for t in tickers if t not in cached_tickers]
+
+        if not tickers_to_fetch:
+            bps_nan = existing_df["bps"].isna().mean() if "bps" in existing_df.columns else 1.0
+            if bps_nan > 0.3:
+                # 캐시 BPS NaN이 30% 초과 → pykrx로 자동 보완
+                print(f"[kr_finance] 캐시 BPS NaN {bps_nan:.0%} → pykrx 보완 실행")
+                existing_df = _fill_bps_eps_via_dart(existing_df, start, end)
+                existing_df.to_parquet(save_path, index=False)
+            else:
+                print("[kr_finance] 캐시 로드")
+            return existing_df
+
+        print(f"[kr_finance] 캐시 로드 + 누락 {len(tickers_to_fetch)}개 종목 보완")
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1순위: DART
-    df = pd.DataFrame()
-    if os.environ.get("DART_API_KEY"):
-        print("[kr_finance] OpenDartReader로 수집 중...")
-        try:
-            df = _build_via_dart(tickers, start, end)
-        except Exception as e:
-            print(f"  DART 실패: {e}")
+    new_df = pd.DataFrame()
 
-    # 2순위: pykrx
-    if df.empty:
-        print("[kr_finance] pykrx로 수집 중... (BPS/EPS만 가능)")
-        try:
-            df = _build_via_pykrx(tickers, start, end)
-        except Exception as e:
-            print(f"  pykrx 실패: {e}")
+    # 1순위: DART (환경변수 없으면 fallback 키 사용) — 5개 팩터 전체 커버
+    print(f"[kr_finance] DART로 {len(tickers_to_fetch)}개 종목 수집 중...")
+    try:
+        new_df = _build_via_dart(tickers_to_fetch, start, end)
+    except Exception as e:
+        print(f"  DART 실패: {e}")
 
-    # 3순위: 네이버 금융 스크래핑 (최근 3년 연간, EPS/BPS/ROE/SPS)
-    if df.empty:
-        print("[kr_finance] 네이버 금융으로 수집 중... (최근 3년 연간)")
+    # 2순위: pykrx — DART 미수집 또는 BPS/EPS NaN 종목 보완
+    if not new_df.empty:
+        # BPS/EPS 둘 다 없는 종목 → pykrx 대상에 재포함
+        no_bps_eps = set(new_df[new_df["bps"].isna() & new_df["eps"].isna()]["ticker"].unique())
+        dart_ok = set(new_df["ticker"].unique()) - no_bps_eps
+    else:
+        dart_ok = set()
+        no_bps_eps = set()
+    pykrx_targets = [t for t in tickers_to_fetch if t not in dart_ok]
+
+    if pykrx_targets:
+        print(f"[kr_finance] DART 재조회로 {len(pykrx_targets)}개 종목 BPS/EPS 보완 중...")
         try:
-            df = _build_via_naver(tickers)
+            if not new_df.empty:
+                new_df = _fill_bps_eps_via_dart(new_df, start, end)
+            # DART에 행 자체가 없는 종목 → pykrx 시도 후 실패 시 스킵
+            dart_missing = [t for t in pykrx_targets if not new_df.empty
+                            and t not in set(new_df["ticker"])]
+            if dart_missing:
+                try:
+                    pykrx_df = _build_via_pykrx(dart_missing, start, end)
+                    if not pykrx_df.empty:
+                        new_df = pd.concat([new_df, pykrx_df], ignore_index=True)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"  DART 재조회 실패: {e}")
+
+    # 3순위: 네이버 금융 — 여전히 미수집 종목 보완 (BPS/EPS/ROE/SPS)
+    covered_so_far = set(new_df["ticker"].unique()) if not new_df.empty else set()
+    naver_targets = [t for t in tickers_to_fetch if t not in covered_so_far]
+
+    if naver_targets:
+        print(f"[kr_finance] 네이버 금융으로 {len(naver_targets)}개 종목 보완 중... (최근 3년)")
+        try:
+            naver_df = _build_via_naver(naver_targets)
+            if not naver_df.empty:
+                new_df = pd.concat([new_df, naver_df], ignore_index=True) if not new_df.empty else naver_df
         except Exception as e:
             print(f"  네이버 실패: {e}")
 
-    if df.empty:
+    if new_df.empty and existing_df.empty:
         print("  [경고] KR 재무 데이터 수집 실패. data/raw/kr_finance.parquet 직접 제공 필요")
         print("         컬럼: date, ticker, bps, eps, sps, roe, gross_profit, total_assets")
         return pd.DataFrame()
 
-    # 공시 지연 적용
-    df["date"] = pd.to_datetime(df["date"]) + pd.Timedelta(days=KR_FILING_LAG_DAYS)
-    df.to_parquet(save_path, index=False)
-    print(f"[kr_finance] 완료: {len(df)}행")
-    return df
+    if new_df.empty:
+        return existing_df
+
+    # 신규 수집 데이터에만 공시 지연 적용 (기존 캐시는 이미 적용됨)
+    new_df["date"] = pd.to_datetime(new_df["date"]) + pd.Timedelta(days=KR_FILING_LAG_DAYS)
+
+    if not existing_df.empty:
+        combined = pd.concat([existing_df, new_df], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["date", "ticker"], keep="first")
+    else:
+        combined = new_df
+
+    combined.to_parquet(save_path, index=False)
+    print(f"[kr_finance] 완료: {len(combined)}행 ({combined['ticker'].nunique()}개 종목)")
+    return combined

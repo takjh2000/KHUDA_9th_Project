@@ -113,35 +113,66 @@ def download_prices(tickers: list[str],
 
 def build(start: str = START_DATE, end: str = END_DATE) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    코스피200 가격 패널 + 분기별 유니버스 구성
+    코스피200 가격 패널 + 분기별 유니버스 구성 (증분 업데이트)
     반환: (price_pivot, universe_df)
     """
-    price_path   = RAW_DIR / "kr_price.parquet"
+    price_path    = RAW_DIR / "kr_price.parquet"
     universe_path = RAW_DIR / "kr_universe.parquet"
-
-    if price_path.exists() and universe_path.exists():
-        print("[kr_price] 캐시 로드")
-        return pd.read_parquet(price_path), pd.read_parquet(universe_path)
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 분기말 날짜 목록
+    # ── 유니버스: 항상 최신 분기 확인 후 갱신 ───────────────────────────────
     quarter_dates = pd.date_range(start, end, freq="QE")
-    print(f"[kr_price] {len(quarter_dates)}개 분기 유니버스 조회 중...")
-    universe_df = get_historical_kospi200(quarter_dates)
 
-    if universe_df.empty or "ticker" not in universe_df.columns:
-        print("[kr_price] 오류: 유니버스 데이터를 가져오지 못했습니다.")
-        print("  pykrx 및 FDR 모두 실패. 네트워크 연결과 패키지 버전을 확인하세요.")
-        return pd.DataFrame(), universe_df
-
-    universe_df.to_parquet(universe_path, index=False)
+    if universe_path.exists():
+        universe_df = pd.read_parquet(universe_path)
+        universe_df["date"] = pd.to_datetime(universe_df["date"])
+        cached_dates = set(universe_df["date"].dt.normalize().unique())
+        missing_dates = [d for d in quarter_dates if pd.Timestamp(d).normalize() not in cached_dates]
+        if missing_dates:
+            print(f"[kr_price] 유니버스 누락 분기 {len(missing_dates)}개 보완 중...")
+            new_uni = get_historical_kospi200(pd.DatetimeIndex(missing_dates))
+            if not new_uni.empty:
+                universe_df = pd.concat([universe_df, new_uni], ignore_index=True).drop_duplicates()
+                universe_df.to_parquet(universe_path, index=False)
+        else:
+            print("[kr_price] 유니버스 캐시 로드")
+    else:
+        print(f"[kr_price] {len(quarter_dates)}개 분기 유니버스 조회 중...")
+        universe_df = get_historical_kospi200(quarter_dates)
+        if universe_df.empty or "ticker" not in universe_df.columns:
+            print("[kr_price] 오류: 유니버스 데이터를 가져오지 못했습니다.")
+            return pd.DataFrame(), pd.DataFrame()
+        universe_df.to_parquet(universe_path, index=False)
 
     all_tickers = universe_df["ticker"].unique().tolist()
-    print(f"[kr_price] 총 {len(all_tickers)}개 종목 가격 다운로드 중...")
-    price_pivot = download_prices(all_tickers, start, end)
-    price_pivot.to_parquet(price_path)
 
+    # ── 가격: 캐시에 없는 종목만 증분 다운로드 ────────────────────────────────
+    if price_path.exists():
+        existing_price = pd.read_parquet(price_path)
+        existing_price.index = pd.to_datetime(existing_price.index)
+        cached_tickers = set(existing_price.columns)
+        missing_tickers = [t for t in all_tickers if t not in cached_tickers]
+        if not missing_tickers:
+            print(f"[kr_price] 캐시 로드 ({len(cached_tickers)}개 종목)")
+            return existing_price, universe_df
+        print(f"[kr_price] 캐시 로드 + 누락 {len(missing_tickers)}개 종목 가격 보완 중...")
+        new_price = download_prices(missing_tickers, start, end)
+        if not new_price.empty:
+            price_pivot = pd.concat([existing_price, new_price], axis=1)
+            price_pivot = price_pivot.loc[:, ~price_pivot.columns.duplicated()]
+            price_pivot.sort_index(inplace=True)
+        else:
+            price_pivot = existing_price
+    else:
+        print(f"[kr_price] 총 {len(all_tickers)}개 종목 가격 다운로드 중...")
+        price_pivot = download_prices(all_tickers, start, end)
+
+    if price_pivot.empty:
+        print("[kr_price] 오류: 가격 데이터 없음")
+        return pd.DataFrame(), universe_df
+
+    price_pivot.to_parquet(price_path)
     print(f"[kr_price] 완료: {price_pivot.shape}")
     return price_pivot, universe_df
 
