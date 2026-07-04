@@ -133,8 +133,9 @@ def load_kr():
 
         sector_s      = sec_df.set_index("ticker")["sector"]
         industry_s    = sec_df.set_index("ticker")["industry"]
-        subindustry_s = sec_df.get("subindustry", industry_s)
-        if isinstance(subindustry_s, pd.DataFrame):
+        if "subindustry" in sec_df.columns:
+            subindustry_s = sec_df.set_index("ticker")["subindustry"]
+        else:
             subindustry_s = industry_s
 
         tickers_panel = panel["ticker"].unique()

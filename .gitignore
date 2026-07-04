@@ -1,6 +1,9 @@
-# 데이터 (파이프라인으로 재수집 가능, 커밋 안 함)
-프로젝트/data/raw/
-프로젝트/data/processed/
+# 데이터 — 백테스트에 실제 쓰이는 최종 산출물만 커밋, 재수집 가능한 중간 캐시는 제외
+프로젝트/data/raw/kr_price.parquet
+프로젝트/data/raw/kr_finance.parquet
+프로젝트/data/raw/kr_kospi200.parquet
+프로젝트/data/raw/us_price.parquet
+프로젝트/data/raw/us_finance.parquet
 
 # 백테스트 결과 차트
 프로젝트/results/
