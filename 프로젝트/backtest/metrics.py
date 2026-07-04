@@ -32,6 +32,14 @@ def mdd(returns: pd.Series) -> float:
     return ((cum - cum.cummax()) / cum.cummax()).min()
 
 
+def margin(returns: pd.Series, turnover: float) -> float:
+    """Margin (bps) = 평균 일간 수익률 / 평균 회전율 — 거래 1단위당 수익 (WQ Brain 스타일)"""
+    r = returns.dropna()
+    if len(r) == 0 or turnover is None or pd.isna(turnover) or turnover == 0:
+        return np.nan
+    return (r.mean() / turnover) * 10000
+
+
 def annual_returns(returns: pd.Series) -> pd.Series:
     """연도별 수익률"""
     r = returns.dropna()
