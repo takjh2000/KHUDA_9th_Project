@@ -1,14 +1,14 @@
-# 데이터 (yfinance로 재수집 가능)
-프로젝트/data/raw/us_price.parquet
-프로젝트/data/raw/us_finance.parquet
-프로젝트/data/raw/kr_price.parquet
-프로젝트/data/raw/kr_finance.parquet
-
-# 전처리 결과 (run_pipeline.py로 재생성 가능)
+# 데이터 (파이프라인으로 재수집 가능, 커밋 안 함)
+프로젝트/data/raw/
 프로젝트/data/processed/
 
 # 백테스트 결과 차트
 프로젝트/results/
+
+# 캐시/로그
+프로젝트/docs_cache/
+docs_cache/
+*.log
 
 # 파이썬 캐시
 __pycache__/

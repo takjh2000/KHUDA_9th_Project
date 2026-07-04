@@ -23,6 +23,9 @@ class Config:
     rebalance:   str   = REBALANCE   # "QE" = 분기말
     truncation:  float = 0.10        # 종목당 최대 비중 (0=제한없음)
     score_weight: bool = True        # True=팩터점수 비중, False=동일가중
+    position_scale: "pd.Series | None" = None
+    # 날짜별 익스포저 배율 (1.0=풀 익스포저, 0.5=절반 축소, 0.0=전량 중립화)
+    # None이면 항상 1.0 (기존 동작과 동일)
 
 
 class LongShortBacktester:
@@ -156,7 +159,7 @@ class LongShortBacktester:
                 else self._trade_dates[-1]
             )
             period = self.price[
-                (self.price.index > rb) & (self.price.index <= next_rb)
+                (self.price.index >= rb) & (self.price.index <= next_rb)
             ]
             if len(period) < 2:
                 continue
@@ -180,6 +183,11 @@ class LongShortBacktester:
                     s_ret = float((row[s_avail] * w).sum())
                 else:
                     s_ret = 0.0
+
+                if self.cfg.position_scale is not None:
+                    scale = float(self.cfg.position_scale.get(date, 1.0))
+                    l_ret *= scale
+                    s_ret *= scale
 
                 all_daily.append({
                     "date":      date,

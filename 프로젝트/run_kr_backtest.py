@@ -253,7 +253,7 @@ def s02_raw(panel, price_pivot):
 
 def s03_raw(panel, price_pivot):
     """Cash & CF Divergence (근사)
-    WQ: ts_corr(ts_mean(cash_balance, 5), ts_mean(cashflow_op, 5), 252)
+    WQ: -ts_corr(ts_mean(cash_balance, 5), ts_mean(cashflow_op, 5), 252)
     근사: cash_balance ≈ equity/total_assets (자기자본비율)
           cashflow_op/total_assets (CF집약도)
           둘 다 DART 연간 데이터 → ffill → 비교 가능
@@ -268,7 +268,7 @@ def s03_raw(panel, price_pivot):
     cash_ratio = eq_p.reindex_like(ta).ffill(limit=252) / ta          # equity ratio
     cf_ratio   = cf_op_p.reindex_like(ta).ffill(limit=252) / ta       # CF intensity
 
-    return ts_corr(ts_mean(cash_ratio, 5), ts_mean(cf_ratio, 5), 252)
+    return -ts_corr(ts_mean(cash_ratio, 5), ts_mean(cf_ratio, 5), 252)
 
 
 def s04_raw(panel, price_pivot):
