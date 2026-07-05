@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import matplotlib.dates as mdates
 
-matplotlib.rcParams["font.family"] = "Malgun Gothic"
+matplotlib.rcParams["font.family"] = "Apple Gothic"
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 from config import PROCESSED_DIR, RAW_DIR

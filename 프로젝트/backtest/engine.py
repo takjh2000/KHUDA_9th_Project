@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from config import LONG_PCT, SHORT_PCT, REBALANCE
+from config import LONG_PCT, SHORT_PCT, REBALANCE, BOOK_SIZE
 
 
 @dataclass
@@ -125,8 +125,8 @@ class LongShortBacktester:
         rebal_dates = self._rebal_dates()
         all_daily   = []
         all_turnover = []
-        prev_long  = pd.Index([])
-        prev_short = pd.Index([])
+        prev_long_w  = pd.Series(dtype=float)
+        prev_short_w = pd.Series(dtype=float)
 
         for i, rb in enumerate(rebal_dates):
             uni = self._get_universe_at(rb)
@@ -146,11 +146,16 @@ class LongShortBacktester:
             long_w  = self._compute_weights(f[long_idx],  reverse=False)
             short_w = self._compute_weights(f[short_idx], reverse=True)
 
-            # 턴오버: 변경된 종목 비율
-            if len(prev_long):
-                changed = len(set(long_idx) - set(prev_long)) / n_long
-                all_turnover.append({"date": rb, "turnover": changed})
-            prev_long, prev_short = long_idx, short_idx
+            # 턴오버: Σ|position_today - position_yesterday| / Book Size
+            # 롱/숏 각각 Book Size/2 배분 → 비중차 합 × 0.5 = 달러턴오버/Book Size
+            union_l = prev_long_w.index.union(long_w.index)
+            union_s = prev_short_w.index.union(short_w.index)
+            d_long  = (long_w.reindex(union_l, fill_value=0.0)
+                       - prev_long_w.reindex(union_l, fill_value=0.0)).abs().sum()
+            d_short = (short_w.reindex(union_s, fill_value=0.0)
+                       - prev_short_w.reindex(union_s, fill_value=0.0)).abs().sum()
+            turnover_fraction = (d_long + d_short) * 0.5
+            prev_long_w, prev_short_w = long_w, short_w
 
             # 보유 기간 결정
             next_rb = (
@@ -166,6 +171,8 @@ class LongShortBacktester:
 
             # 일별 수익률 계산
             rets = period.pct_change().fillna(0).iloc[1:]
+            # 신규 비중이 실제로 반영되는 첫 거래일에 턴오버 기록
+            all_turnover.append({"date": rets.index[0], "turnover": turnover_fraction})
 
             for date, row in rets.iterrows():
                 # 상장폐지: 가격이 있는 종목만 유지
@@ -224,5 +231,19 @@ class BacktestResult:
         return self.ret_df["short_ret"] if "short_ret" in self.ret_df else pd.Series(dtype=float)
 
     @property
+    def daily_turnover(self) -> pd.Series:
+        """전체 거래일 기준 일별 턴오버 (리밸런싱 시행일 외 0)"""
+        idx = self.ret_df.index
+        if len(idx) == 0:
+            return pd.Series(dtype=float)
+        s = pd.Series(0.0, index=idx)
+        if not self.turn_df.empty:
+            common = self.turn_df.index.intersection(idx)
+            s.loc[common] = self.turn_df.loc[common, "turnover"]
+        return s
+
+    @property
     def avg_turnover(self) -> float:
-        return self.turn_df["turnover"].mean() if not self.turn_df.empty else np.nan
+        """연간 Turnover = mean(Daily Turnover) — 리밸런싱 없는 날의 0도 포함한 평균"""
+        dt = self.daily_turnover
+        return dt.mean() if len(dt) else np.nan

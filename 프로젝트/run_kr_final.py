@@ -21,7 +21,7 @@ import matplotlib.ticker as mticker
 import matplotlib.dates as mdates
 from matplotlib.backends.backend_pdf import PdfPages
 
-matplotlib.rcParams["font.family"] = "Malgun Gothic"
+matplotlib.rcParams["font.family"] = "AppleGothic"
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 from config import PROCESSED_DIR, RAW_DIR
@@ -131,6 +131,28 @@ def to_pivot(panel, col):
     return p.ffill(limit=252)
 
 
+def _safe_log(x):
+    """항상 양수인 지표(equity/bps, cap, price)용 로그 변환. 0 이하는 NaN."""
+    return np.log(x.where(x > 0))
+
+
+def _signed_log(x):
+    """적자가 가능한 손익 지표(operating_income, cashflow_op, eps)용
+    부호 보존 로그 압축: sign(x) * log(1+|x|)."""
+    return np.sign(x) * np.log1p(x.abs())
+
+
+def _signed_log_ratio(numerator, denom, scale=1.0):
+    """분자가 음수(적자)일 수 있는 비율용. 비율을 먼저 구한 뒤 부호를 보존하며
+    로그 압축한다: sign(ratio) * log1p(|ratio| * scale). 흑자가 항상 적자보다 높은 점수를
+    받는 순서는 유지하면서, 분모가 작을 때 비율이 폭발하는 극단값만 완만하게 누른다.
+    scale: 비율의 전형적인 크기가 log1p의 압축 구간(값이 1 안팎)에 들어오도록 맞추는 배율.
+    eps/price처럼 비율 자체가 항상 작은 지표는 scale을 키우지 않으면 log1p가 거의
+    선형으로 동작해 흑자 기업 사이의 변별력이 사라진다."""
+    ratio = numerator / denom.where(denom > 0)
+    return np.sign(ratio) * np.log1p(ratio.abs() * scale)
+
+
 def make_groups(panel, group_s: pd.Series) -> pd.Series:
     tickers = panel["ticker"].unique()
     return pd.Series({t: group_s.get(t, "Unknown") for t in tickers})
@@ -186,9 +208,10 @@ def s02_raw(panel, price_pivot):
     oi_p, shares_p, eps_p = (to_pivot(panel, c) for c in ["operating_income", "shares", "eps"])
     if oi_p is not None and shares_p is not None:
         cap = price_pivot * shares_p.reindex_like(price_pivot).ffill(limit=252)
-        oey = oi_p.reindex_like(price_pivot).ffill(limit=252) / cap.replace(0, np.nan)
+        oi = oi_p.reindex_like(price_pivot).ffill(limit=252)
+        oey = _signed_log(oi) - _safe_log(cap)
     elif eps_p is not None:
-        oey = eps_p / price_pivot.replace(0, np.nan)
+        oey = _signed_log(eps_p) - _safe_log(price_pivot)
     else:
         return None
     return ts_rank(oey, 126)
@@ -208,15 +231,16 @@ def s05_raw(panel, price_pivot, industry_s):
     cf_op_p, shares_p = to_pivot(panel, "cashflow_op"), to_pivot(panel, "shares")
     if cf_op_p is None:
         return None
+    cf = cf_op_p.reindex_like(price_pivot).ffill(limit=252)
     if shares_p is not None:
         cap = price_pivot * shares_p.reindex_like(price_pivot).ffill(limit=252)
-        cf_yield = cf_op_p.reindex_like(price_pivot).ffill(limit=252) / cap.replace(0, np.nan)
+        cf_yield = _signed_log_ratio(cf, cap)
     else:
         ta_p = to_pivot(panel, "total_assets")
         if ta_p is None:
             return None
-        cf_yield = cf_op_p.reindex_like(price_pivot).ffill(limit=252) / \
-                   ta_p.reindex_like(price_pivot).ffill(limit=252).replace(0, np.nan)
+        ta = ta_p.reindex_like(price_pivot).ffill(limit=252)
+        cf_yield = _signed_log_ratio(cf, ta)
     z = ts_zscore(cf_yield, 63)
     groups = make_groups(panel, industry_s)
     common = z.columns.intersection(groups.index)
@@ -240,8 +264,8 @@ def s07_raw(panel, price_pivot, industry_s):
     eps_p, bps_p = to_pivot(panel, "eps"), to_pivot(panel, "bps")
     if eps_p is None or bps_p is None:
         return None
-    underrated = eps_p / price_pivot.replace(0, np.nan)
-    low_pbr = bps_p / price_pivot.replace(0, np.nan)
+    underrated = _signed_log(eps_p) - _safe_log(price_pivot)
+    low_pbr = _safe_log(bps_p) - _safe_log(price_pivot)
     groups = make_groups(panel, industry_s)
     common1 = underrated.columns.intersection(groups.index)
     underrated_adj = rank(group_neutralize(underrated[common1], groups[common1]))
@@ -331,7 +355,7 @@ def s15_raw(panel, price_pivot):
     bps_p = to_pivot(panel, "bps")
     if bps_p is None:
         return None
-    bp = bps_p / price_pivot.replace(0, np.nan)
+    bp = _safe_log(bps_p) - _safe_log(price_pivot)
     d1 = zscore(ts_delta(bp, 21))
     d3 = zscore(ts_delta(ts_delay(bp, 21), 42))
     return d1 + d3
@@ -340,31 +364,30 @@ def s15_raw(panel, price_pivot):
 # ── 전략 메타데이터 (11개만) ────────────────────────────────────────────────────
 
 STRATEGIES = {
-    "S01_LowAccrual":          (s01_raw, 6,  "Market",   0.08),
-    "S02_OEY":                 (s02_raw, 4,  "Industry", 0.08),
-    "S03_CashCFDivergence":    (s03_raw, 4,  "Industry", 0.04),
-    "S05_IndustryNeutralCFY":  (s05_raw, 4,  "Sector",   0.08),
-    "S06_DebtSpikeReversal":   (s06_raw, 4,  "Sector",   0.01),
-    "S07_AggressiveDualValue": (s07_raw, 4,  "Market",   0.01),
-    "S10_ProfitableBuyback":   (s10_raw, 1,  "Market",   0.08),
-    "S11_SGADriven":           (s11_raw, 2,  "Market",   0.08),
-    "S12_GoodwillOverval":     (s12_raw, 4,  "Industry", 0.04),
-    "S14_VolRegimeDebt":       (s14_raw, 16, "Market",   0.01),
-    "S15_BookToCapMom":        (s15_raw, 5,  "Industry", 0.04),
+    "Ouality#1-Low Accrual Clean":          (s01_raw, 6,  "Market",   0.08),
+    # "Value#1-Operating Income Earnings Yield":                 (s02_raw, 4,  "Industry", 0.08),
+    # "Quality#2-Cash & Cash Flow Divergence Information":    (s03_raw, 4,  "Industry", 0.04),
+    # "Value#2-Industry-Neutral Cash Flow Yield ":  (s05_raw, 4,  "Industry",   0.08),
+    # "Value#3-Aggressive Dual Value Blend with Momentum Neutralization": (s07_raw, 4,  "Market",   0.01),
+    # "Quality#3-Profitable Buyback & Cash Flow Distortion":   (s10_raw, 1,  "Market",   0.08),
+    # "Quality#4-SG&A-Driven Marketing Efficiency Dynamic":           (s11_raw, 2,  "Market",   0.08),
+    # "Quality#5-Goodwill Overvaluation & Financial Accrued Risk":     (s12_raw, 4,  "Industry", 0.04),
+    # "S14_VolRegimeDebt":       (s14_raw, 16, "Market",   0.01),
+    # "Value#4-Book to Cap Momentum":        (s15_raw, 5,  "Industry", 0.04),
 }
 
 STRATEGY_NAMES = {
-    "S01_LowAccrual":          "Low Accrual Clean",
-    "S02_OEY":                 "Operating Income EY",
-    "S03_CashCFDivergence":    "Cash & CF Divergence",
-    "S05_IndustryNeutralCFY":  "Industry-Neutral CF Yield",
-    "S06_DebtSpikeReversal":   "Debt Spike Reversal",
-    "S07_AggressiveDualValue": "Aggressive Dual Value",
-    "S10_ProfitableBuyback":   "Profitable Buyback",
-    "S11_SGADriven":           "SG&A Marketing Efficiency",
-    "S12_GoodwillOverval":     "Goodwill Overvaluation",
-    "S14_VolRegimeDebt":       "Vol-Regime Debt Decay",
-    "S15_BookToCapMom":        "Book to Cap Momentum",
+    "Ouality#1-Low Accrual Clean":          "현금흐름",
+    # "Value#1-Operating Income Earnings Yield":                 "영업이익",
+    # "Quality#2-Cash & Cash Flow Divergence Information":    "현금",
+    # "Value#2-Industry-Neutral Cash Flow Yield ":  "영업현금흐름",
+    # "S06_DebtSpikeReversal":   "Debt Spike Reversal",
+    # "Value#3-Aggressive Dual Value Blend with Momentum Neutralization": "ebitda",
+    # "Quality#3-Profitable Buyback & Cash Flow Distortion":   "자사주매입",
+    # "Quality#4-SG&A-Driven Marketing Efficiency Dynamic":           "판매관리비",
+    # "Quality#5-Goodwill Overvaluation & Financial Accrued Risk":     "영업권",
+    # "S14_VolRegimeDebt":       "Vol-Regime Debt Decay",
+    # "Value#4-Book to Cap Momentum":        "PBR",
 }
 
 

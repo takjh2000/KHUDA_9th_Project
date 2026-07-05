@@ -19,7 +19,7 @@ import matplotlib.ticker as mticker
 import matplotlib.dates as mdates
 from matplotlib.backends.backend_pdf import PdfPages
 
-matplotlib.rcParams["font.family"] = "Malgun Gothic"
+matplotlib.rcParams["font.family"] = "AppleGothic"
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 from config import PROCESSED_DIR, RAW_DIR
@@ -140,7 +140,7 @@ def main():
         name = STRATEGY_NAMES[label]
         print(f"\n[{label}] {name}", flush=True)
 
-        if label in ("S05_IndustryNeutralCFY", "S07_AggressiveDualValue"):
+        if fn in (s05_raw, s07_raw):
             raw_f = fn(panel, price_pivot, industry_s)
         else:
             raw_f = fn(panel, price_pivot)
@@ -224,16 +224,24 @@ def generate_pdf(summary, all_results):
             dd = (cum - cum.cummax()) / cum.cummax()
             row = summary[summary["전략"] == label].iloc[0]
 
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 6.5),
+            # 2,000,000원(2000 단위 × k=1000) 초기 투자금 기준 누적 손익
+            profit = (2000 * cum - 2000) * 1000
+
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 7),
                                             gridspec_kw={"height_ratios": [3, 1]})
-            ax1.plot(cum.index, cum.values, color="#1565C0", lw=1.4)
-            ax1.fill_between(cum.index, cum.values, 1, alpha=0.1, color="#1565C0")
-            ax1.axhline(1, color="gray", lw=0.5, linestyle="--")
+            ax1.plot(profit.index, profit.values, color="#59CDD5", lw=1.4)
+            ax1.axhline(0, color="gray", lw=0.5, linestyle="--")
             ax1.set_title(f"{label}  ({STRATEGY_NAMES[label]})", fontsize=13, fontweight="bold")
-            ax1.set_ylabel("누적 배수")
+            ax1.set_ylabel("누적 손익")
             ax1.grid(alpha=0.25)
-            ax1.xaxis.set_major_locator(mdates.YearLocator())
-            ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+            ax1.yaxis.set_major_formatter(
+                mticker.FuncFormatter(lambda x, pos: f"{x / 1000:,.0f}K")
+            )
+            ax1.xaxis.set_major_locator(mdates.MonthLocator(bymonth=(1, 7)))
+            ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
+            for tick in ax1.get_xticklabels():
+                tick.set_rotation(45)
+                tick.set_ha("right")
 
             metrics_str = (f"CAGR {row['Return(CAGR)']:.2%}  |  Sharpe {row['Sharpe']:.2f}  |  "
                            f"Margin {row['Margin(bp)']:.1f}bp  |  Turnover {row['Turnover']:.2%}  |  "
@@ -244,8 +252,11 @@ def generate_pdf(summary, all_results):
             ax2.set_ylabel("DD")
             ax2.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1))
             ax2.grid(alpha=0.25)
-            ax2.xaxis.set_major_locator(mdates.YearLocator())
-            ax2.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+            ax2.xaxis.set_major_locator(mdates.MonthLocator(bymonth=(1, 7)))
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
+            for tick in ax2.get_xticklabels():
+                tick.set_rotation(45)
+                tick.set_ha("right")
 
             fig.tight_layout()
             pdf.savefig(fig)
