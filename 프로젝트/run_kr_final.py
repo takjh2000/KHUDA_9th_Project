@@ -166,25 +166,26 @@ def build_factor(raw_f, decay_n, neutralization, truncation_pct, sector_s, indus
 # ── 전략 정의 (11개만) ─────────────────────────────────────────────────────────
 
 def s01_raw(panel, price_pivot):
-    roe_p, eq_p, cf_op_p, ta_p = (to_pivot(panel, c) for c in ["roe", "equity", "cashflow_op", "total_assets"])
-    if roe_p is None or eq_p is None or cf_op_p is None or ta_p is None:
+    roe_p, eq_p, cf_op_p, ta_p, shares_p = (
+        to_pivot(panel, c) for c in ["roe", "equity", "cashflow_op", "total_assets", "shares"]
+    )
+    if roe_p is None or eq_p is None or cf_op_p is None or ta_p is None or shares_p is None:
         return None
     net_income = roe_p * eq_p.reindex_like(roe_p).ffill(limit=252)
     cf = cf_op_p.reindex_like(roe_p).ffill(limit=252)
     ta = ta_p.reindex_like(roe_p).ffill(limit=252).replace(0, np.nan)
     accrual = rank(-(net_income - cf) / ta)
-    cap_bucket = bucket(rank(price_pivot), n=5)
+    cap = price_pivot * shares_p.reindex_like(price_pivot).ffill(limit=252)
+    cap_bucket = bucket(rank(cap), n=5)
     cap_neut = group_neutralize_dynamic(accrual, cap_bucket)
     mom = ts_rank(price_pivot.pct_change(), 252)
     return cap_neut - mom
 
 
 def s02_raw(panel, price_pivot):
-    oi_p, eq_p, bps_p, eps_p = (to_pivot(panel, c) for c in ["operating_income", "equity", "bps", "eps"])
-    if oi_p is not None and eq_p is not None and bps_p is not None:
-        shares = eq_p.reindex_like(price_pivot).ffill(limit=252) / \
-                 bps_p.reindex_like(price_pivot).ffill(limit=252).replace(0, np.nan)
-        cap = price_pivot * shares
+    oi_p, shares_p, eps_p = (to_pivot(panel, c) for c in ["operating_income", "shares", "eps"])
+    if oi_p is not None and shares_p is not None:
+        cap = price_pivot * shares_p.reindex_like(price_pivot).ffill(limit=252)
         oey = oi_p.reindex_like(price_pivot).ffill(limit=252) / cap.replace(0, np.nan)
     elif eps_p is not None:
         oey = eps_p / price_pivot.replace(0, np.nan)
@@ -203,14 +204,12 @@ def s03_raw(panel, price_pivot):
     return -ts_corr(ts_mean(cash_ratio, 5), ts_mean(cf_ratio, 5), 252)
 
 
-def s05_raw(panel, price_pivot):
-    cf_op_p, eq_p, bps_p = (to_pivot(panel, c) for c in ["cashflow_op", "equity", "bps"])
+def s05_raw(panel, price_pivot, industry_s):
+    cf_op_p, shares_p = to_pivot(panel, "cashflow_op"), to_pivot(panel, "shares")
     if cf_op_p is None:
         return None
-    if eq_p is not None and bps_p is not None:
-        shares = eq_p.reindex_like(price_pivot).ffill(limit=252) / \
-                 bps_p.reindex_like(price_pivot).ffill(limit=252).replace(0, np.nan)
-        cap = price_pivot * shares
+    if shares_p is not None:
+        cap = price_pivot * shares_p.reindex_like(price_pivot).ffill(limit=252)
         cf_yield = cf_op_p.reindex_like(price_pivot).ffill(limit=252) / cap.replace(0, np.nan)
     else:
         ta_p = to_pivot(panel, "total_assets")
@@ -218,7 +217,10 @@ def s05_raw(panel, price_pivot):
             return None
         cf_yield = cf_op_p.reindex_like(price_pivot).ffill(limit=252) / \
                    ta_p.reindex_like(price_pivot).ffill(limit=252).replace(0, np.nan)
-    return ts_zscore(cf_yield, 63)
+    z = ts_zscore(cf_yield, 63)
+    groups = make_groups(panel, industry_s)
+    common = z.columns.intersection(groups.index)
+    return group_rank(z[common], groups[common])
 
 
 def s06_raw(panel, price_pivot):
@@ -230,19 +232,22 @@ def s06_raw(panel, price_pivot):
     x = -ts_zscore(debt_piv, 252)
     alpha = signed_power(x, 4)
     condition = debt_piv > ts_mean(debt_piv, 63)
-    alt = pd.DataFrame(-1.0, index=alpha.index, columns=alpha.columns)
-    f = trade_when(condition, alpha, alt)
+    f = trade_when(condition, alpha, -1)
     return hump(f, 0.003)
 
 
-def s07_raw(panel, price_pivot):
+def s07_raw(panel, price_pivot, industry_s):
     eps_p, bps_p = to_pivot(panel, "eps"), to_pivot(panel, "bps")
     if eps_p is None or bps_p is None:
         return None
     underrated = eps_p / price_pivot.replace(0, np.nan)
     low_pbr = bps_p / price_pivot.replace(0, np.nan)
-    underrated_adj = rank(underrated)
-    low_pbr_recent = ts_rank(low_pbr, 63)
+    groups = make_groups(panel, industry_s)
+    common1 = underrated.columns.intersection(groups.index)
+    underrated_adj = rank(group_neutralize(underrated[common1], groups[common1]))
+    low_pbr_ts = ts_rank(low_pbr, 63)
+    common2 = low_pbr_ts.columns.intersection(groups.index)
+    low_pbr_recent = group_rank(low_pbr_ts[common2], groups[common2])
     signal = df_max(underrated_adj, low_pbr_recent)
     returns = price_pivot.pct_change()
     mom_group = bucket(rank(ts_mean(returns, 240)), n=10)
@@ -250,15 +255,18 @@ def s07_raw(panel, price_pivot):
 
 
 def s10_raw(panel, price_pivot):
-    oi_p, ta_p, eq_p = to_pivot(panel, "operating_income"), to_pivot(panel, "total_assets"), to_pivot(panel, "equity")
-    if ta_p is None or eq_p is None:
+    oi_p, ta_p, shares_p = (
+        to_pivot(panel, c) for c in ["operating_income", "total_assets", "shares"]
+    )
+    if ta_p is None or shares_p is None:
         return None
     if oi_p is not None:
         prof2 = ts_backfill(oi_p.reindex_like(ta_p).ffill(limit=252) / ta_p.replace(0, np.nan), 252)
     else:
         prof2 = None
-    eq_prev = eq_p.shift(252)
-    buyback = -(eq_p - eq_prev) / eq_prev.abs().replace(0, np.nan)
+    shares_aligned = shares_p.reindex_like(ta_p).ffill(limit=252)
+    shares_prev = shares_aligned.shift(252)
+    buyback = -(shares_aligned / shares_prev.replace(0, np.nan))
     if prof2 is not None:
         signal = buyback * (1 + rank(prof2.reindex_like(buyback)))
     else:
@@ -267,40 +275,34 @@ def s10_raw(panel, price_pivot):
 
 
 def s11_raw(panel, price_pivot):
-    sga_p, oi_p, eq_p = to_pivot(panel, "sga_expense"), to_pivot(panel, "operating_income"), to_pivot(panel, "equity")
-    if sga_p is None:
+    sga_p, oi_p, sps_p, shares_p = (
+        to_pivot(panel, c) for c in ["sga_expense", "operating_income", "sps", "shares"]
+    )
+    if sga_p is None or oi_p is None or sps_p is None or shares_p is None:
         return None
     sga = sga_p.ffill(limit=252)
-    if oi_p is not None:
-        oi = oi_p.reindex_like(sga).ffill(limit=252)
-        opex = (sga + oi.abs()).replace(0, np.nan)
-        signal_raw = sga / opex
-    else:
-        if eq_p is None:
-            return None
-        eq = eq_p.reindex_like(sga).ffill(limit=252).replace(0, np.nan)
-        signal_raw = sga / eq
-    prev = signal_raw.shift(252)
-    f_ratio = signal_raw / prev.replace(0, np.nan)
-    if eq_p is not None:
-        eq2 = eq_p.reindex_like(sga).ffill(limit=252)
-        cond = eq2 > ts_mean(eq2, 252)
-    else:
-        cond = pd.DataFrame(True, index=sga.index, columns=sga.columns)
-    a = zscore(-f_ratio)
-    result = trade_when(cond, a, -a)
-    return hump(result, 0.001)
+    oi = oi_p.reindex_like(sga).ffill(limit=252)
+    revenue = (sps_p * shares_p).reindex_like(sga).ffill(limit=252)
+    operating_expense = (revenue - oi).replace(0, np.nan)
+    signal = sga / operating_expense
+    f = signal / ts_delay(signal, 252).replace(0, np.nan)
+    cond = revenue > ts_mean(revenue, 252)
+    a = hump(f, 0.001)
+    return trade_when(cond, zscore(a), ~cond)
 
 
 def s12_raw(panel, price_pivot):
-    gw_p, ta_p, sps_p, eps_p = (to_pivot(panel, c) for c in ["goodwill", "total_assets", "sps", "eps"])
-    if sps_p is None:
+    gw_p, ta_p, sps_p, eps_p, shares_p = (
+        to_pivot(panel, c) for c in ["goodwill", "total_assets", "sps", "eps", "shares"]
+    )
+    if sps_p is None or shares_p is None:
         return None
+    sales = (sps_p * shares_p).reindex_like(sps_p).ffill(limit=252)
     if gw_p is not None:
-        gw_aligned = gw_p.reindex_like(sps_p).ffill(limit=60)
-        ratio = gw_aligned / sps_p.replace(0, np.nan)
+        gw_aligned = gw_p.reindex_like(sales).ffill(limit=60)
+        ratio = gw_aligned / sales.replace(0, np.nan)
     elif ta_p is not None:
-        ratio = ta_p / sps_p.replace(0, np.nan)
+        ratio = ta_p.reindex_like(sales) / sales.replace(0, np.nan)
     else:
         return None
     gw_signal = -ts_backfill(zscore(ratio), 63)
@@ -321,9 +323,7 @@ def s14_raw(panel, price_pivot):
     f_raw = signed_power(-ts_zscore(debt_piv, 63), 1.8)
     ret = price_pivot.pct_change()
     regime_raw = ts_zscore(ts_std(ret, 21), 63)
-    nan_df = pd.DataFrame(np.nan, index=f_raw.index, columns=f_raw.columns)
-    f = trade_when(regime_raw < -0.1, f_raw, nan_df)
-    f = f.where(~(regime_raw > 0.8), other=np.nan)
+    f = trade_when(regime_raw < -0.1, f_raw, regime_raw > 0.8)
     return f.ffill(limit=5)
 
 
@@ -383,7 +383,10 @@ def main():
         name = STRATEGY_NAMES[label]
         print(f"\n[{label}] {name}", flush=True)
 
-        raw_f = fn(panel, price_pivot)
+        if label in ("S05_IndustryNeutralCFY", "S07_AggressiveDualValue"):
+            raw_f = fn(panel, price_pivot, industry_s)
+        else:
+            raw_f = fn(panel, price_pivot)
         if raw_f is None:
             print("  raw signal 없음, 건너뜀", flush=True)
             continue

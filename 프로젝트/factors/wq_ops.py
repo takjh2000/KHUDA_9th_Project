@@ -145,14 +145,33 @@ def ts_backfill(df: pd.DataFrame, n: int) -> pd.DataFrame:
     return df.fillna(method="ffill", limit=n)
 
 
-def trade_when(condition: pd.DataFrame, signal: pd.DataFrame,
-               otherwise) -> pd.DataFrame:
-    """condition True일 때 signal, 아닐 때 otherwise 반환"""
-    if isinstance(otherwise, (int, float)):
-        alt = pd.DataFrame(otherwise, index=signal.index, columns=signal.columns)
+def trade_when(entry: pd.DataFrame, alpha: pd.DataFrame, exit) -> pd.DataFrame:
+    """
+    entry 참: alpha로 갱신 / exit 참: 청산(NaN) / 둘 다 거짓: 직전 포지션 유지
+    exit == -1(스칼라): 청산 없이 계속 유지(hold-forever)
+    exit이 boolean DataFrame이 아니면(그 외 상수 or 값 DataFrame) 기존 방식대로
+    단순 if-else(entry 참=alpha, 거짓=exit값)로 동작 (하위 호환)
+    """
+    if isinstance(exit, (int, float)) and exit == -1:
+        exit_cond = pd.DataFrame(False, index=alpha.index, columns=alpha.columns)
+    elif isinstance(exit, pd.DataFrame) and (exit.dtypes == bool).all():
+        exit_cond = exit
     else:
-        alt = otherwise
-    return signal.where(condition, other=alt)
+        alt = (pd.DataFrame(exit, index=alpha.index, columns=alpha.columns)
+               if isinstance(exit, (int, float)) else exit)
+        return alpha.where(entry, other=alt)
+
+    result = alpha.copy() * np.nan
+    prev = pd.Series(np.nan, index=alpha.columns)
+    for date in alpha.index:
+        e = entry.loc[date].fillna(False)
+        x = exit_cond.loc[date].fillna(False)
+        cur = prev.copy()
+        cur[e] = alpha.loc[date][e]
+        cur[x] = np.nan
+        result.loc[date] = cur
+        prev = cur
+    return result
 
 
 def ts_sum(df: pd.DataFrame, n: int) -> pd.DataFrame:

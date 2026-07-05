@@ -333,8 +333,7 @@ def s06_raw(panel, price_pivot):
     x = -ts_zscore(debt_piv, 252)
     alpha = signed_power(x, 4)
     condition = debt_piv > ts_mean(debt_piv, 63)
-    alt = pd.DataFrame(-1.0, index=alpha.index, columns=alpha.columns)
-    f = trade_when(condition, alpha, alt)
+    f = trade_when(condition, alpha, -1)
     return hump(f, 0.003)
 
 
@@ -506,9 +505,7 @@ def s14_raw(panel, price_pivot):
     ret = price_pivot.pct_change()
     regime_raw = ts_zscore(ts_std(ret, 21), 63)
 
-    nan_df = pd.DataFrame(np.nan, index=f_raw.index, columns=f_raw.columns)
-    f = trade_when(regime_raw < -0.1, f_raw, nan_df)
-    f = f.where(~(regime_raw > 0.8), other=np.nan)
+    f = trade_when(regime_raw < -0.1, f_raw, regime_raw > 0.8)
     return f.ffill(limit=5)
 
 
