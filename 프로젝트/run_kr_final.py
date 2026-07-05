@@ -4,7 +4,7 @@ KR 11개 전략 최종 백테스트 (2019-01-01 ~ 2023-12-31)
 - 중립화: Market/Sector/Industry 각 전략 스펙대로
 - Decay: decay_linear (선형 가중 이동평균)
 - 롱숏 상위/하위 50%, factor-score 비중, 전략별 truncation
-- 지표: Return(CAGR), Sharpe, Margin(bp), Turnover, Drawdown(MDD)
+- 지표: Returns, Sharpe, Margin, Turnover, Drawdown, Fitness (WQ Brain 스타일, Book Size $20M 기준)
 - 출력: results/kr_final/report.pdf, summary.csv
 """
 import sys, warnings
@@ -26,7 +26,7 @@ matplotlib.rcParams["axes.unicode_minus"] = False
 
 from config import PROCESSED_DIR, RAW_DIR
 from backtest.engine import LongShortBacktester, Config
-from backtest.metrics import cagr, sharpe, mdd, margin
+from backtest.metrics import returns_metric, sharpe, mdd, margin, fitness
 from factors.wq_ops import (
     rank, zscore, ts_mean, ts_std, ts_rank, ts_zscore,
     ts_delta, ts_delay, ts_corr, ts_backfill,
@@ -401,16 +401,17 @@ def main():
             print("  수익률 없음, 건너뜀", flush=True)
             continue
 
-        c, s, m, t = cagr(ls), sharpe(ls), mdd(ls), res.avg_turnover
+        ret, s, m, t = returns_metric(ls), sharpe(ls), mdd(ls), res.avg_turnover
         mg = margin(ls, t)
-        print(f"  CAGR {c:7.2%}  Sharpe {s:6.2f}  Margin {mg:7.1f}bp  "
-              f"Turnover {t:6.2%}  MDD {m:7.2%}", flush=True)
+        fit = fitness(s, ret, t)
+        print(f"  Returns {ret:7.2%}  Sharpe {s:6.2f}  Margin {mg:7.1f}bp  "
+              f"Turnover {t:6.2%}  MDD {m:7.2%}  Fitness {fit:6.2f}", flush=True)
 
         all_results[label] = res
         rows.append({
             "전략": label, "전략명": name,
-            "Return(CAGR)": c, "Sharpe": s, "Margin(bp)": mg,
-            "Turnover": t, "Drawdown(MDD)": m,
+            "Returns": ret, "Sharpe": s, "Margin": mg,
+            "Turnover": t, "Drawdown": m, "Fitness": fit,
         })
 
     if not rows:
@@ -439,18 +440,19 @@ def generate_pdf(summary, all_results):
                   fontsize=10.5, color="#555")
 
         disp = summary.set_index("전략")[
-            ["Return(CAGR)", "Sharpe", "Margin(bp)", "Turnover", "Drawdown(MDD)"]
+            ["Returns", "Sharpe", "Margin", "Turnover", "Drawdown", "Fitness"]
         ].copy()
-        disp["Return(CAGR)"]  = disp["Return(CAGR)"].map(lambda x: f"{x:.2%}")
+        disp["Returns"]       = disp["Returns"].map(lambda x: f"{x:.2%}")
         disp["Sharpe"]        = disp["Sharpe"].map(lambda x: f"{x:.2f}")
-        disp["Margin(bp)"]    = disp["Margin(bp)"].map(lambda x: f"{x:.1f}")
+        disp["Margin"]    = disp["Margin"].map(lambda x: f"{x:.1f}")
         disp["Turnover"]      = disp["Turnover"].map(lambda x: f"{x:.2%}")
-        disp["Drawdown(MDD)"] = disp["Drawdown(MDD)"].map(lambda x: f"{x:.2%}")
+        disp["Drawdown"] = disp["Drawdown"].map(lambda x: f"{x:.2%}")
+        disp["Fitness"]       = disp["Fitness"].map(lambda x: f"{x:.2f}")
 
         ax = fig.add_axes([0.05, 0.08, 0.9, 0.72])
         ax.axis("off")
         cell_text = [[idx] + list(row) for idx, row in zip(disp.index, disp.values)]
-        col_labels = ["전략", "Return(CAGR)", "Sharpe", "Margin(bp)", "Turnover", "Drawdown(MDD)"]
+        col_labels = ["전략", "Returns", "Sharpe", "Margin", "Turnover", "Drawdown", "Fitness"]
         tbl = ax.table(cellText=cell_text, colLabels=col_labels, loc="center", cellLoc="center")
         tbl.auto_set_font_size(False)
         tbl.set_fontsize(10)
@@ -478,9 +480,9 @@ def generate_pdf(summary, all_results):
             ax1.xaxis.set_major_locator(mdates.YearLocator())
             ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
 
-            metrics_str = (f"CAGR {row['Return(CAGR)']:.2%}  |  Sharpe {row['Sharpe']:.2f}  |  "
-                           f"Margin {row['Margin(bp)']:.1f}bp  |  Turnover {row['Turnover']:.2%}  |  "
-                           f"MDD {row['Drawdown(MDD)']:.2%}")
+            metrics_str = (f"Returns {row['Returns']:.2%}  |  Sharpe {row['Sharpe']:.2f}  |  "
+                           f"Margin {row['Margin']:.1f}bp  |  Turnover {row['Turnover']:.2%}  |  "
+                           f"MDD {row['Drawdown']:.2%}  |  Fitness {row['Fitness']:.2f}")
             ax1.set_xlabel(metrics_str, fontsize=9.5)
 
             ax2.fill_between(dd.index, dd.values, 0, alpha=0.5, color="#D32F2F")
