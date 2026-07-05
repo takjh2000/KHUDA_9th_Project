@@ -36,7 +36,7 @@ from run_kr_final import (
     s01_raw, s02_raw, s03_raw, s05_raw, s06_raw, s07_raw,
     s10_raw, s11_raw, s12_raw, s14_raw, s15_raw,
     to_pivot, make_groups, neutralize, apply_decay, build_factor,
-    STRATEGIES, STRATEGY_NAMES,
+    STRATEGIES, STRATEGY_NAMES, ORIGINAL_FUNCS,
 )
 
 RESULTS_DIR = Path("results/kr_final_quarterly")
@@ -164,7 +164,23 @@ def main():
         print(f"  Returns {ret:7.2%}  Sharpe {s:6.2f}  Margin {mg:7.1f}bp  "
               f"Turnover {t:6.2%}  MDD {m:7.2%}  Fitness {fit:6.2f}", flush=True)
 
-        all_results[label] = res
+        original_res = None
+        fn_original = ORIGINAL_FUNCS.get(fn)
+        if fn_original is not None:
+            if fn in (s05_raw, s07_raw):
+                original_raw_f = fn_original(panel, price_pivot, industry_s)
+            else:
+                original_raw_f = fn_original(panel, price_pivot)
+            if original_raw_f is not None:
+                original_factor = build_factor(
+                    original_raw_f, decay_n, neut_level, trunc, sector_s, industry_s, panel
+                )
+                original_bt = LongShortBacktester(
+                    price=bt_price_pivot, factor=original_factor, universe=universe, config=cfg
+                )
+                original_res = original_bt.run()
+
+        all_results[label] = {"raw": res, "original": original_res}
         rows.append({
             "전략": label, "전략명": name,
             "Returns": ret, "Sharpe": s, "Margin": mg,
@@ -220,7 +236,10 @@ def generate_pdf(summary, all_results):
         pdf.savefig(fig)
         plt.close(fig)
 
-        for label, res in all_results.items():
+        for label, res_dict in all_results.items():
+            res = res_dict["raw"]
+            original_res = res_dict.get("original")
+
             ls = res.ls_returns.dropna()
             cum = (1 + ls).cumprod()
             dd = (cum - cum.cummax()) / cum.cummax()
@@ -231,11 +250,17 @@ def generate_pdf(summary, all_results):
 
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7, 7),
                                             gridspec_kw={"height_ratios": [3, 1]})
-            ax1.plot(profit.index, profit.values, color="#59CDD5", lw=1.4)
+            ax1.plot(profit.index, profit.values, color="red", lw=1.4, label="가설")
+            if original_res is not None:
+                ls_o = original_res.ls_returns.dropna()
+                cum_o = (1 + ls_o).cumprod()
+                profit_o = (2000 * cum_o - 2000) * 1000
+                ax1.plot(profit_o.index, profit_o.values, color="#59CDD5", lw=1.4, label="기준")
             ax1.axhline(0, color="gray", lw=0.5, linestyle="--")
             ax1.set_title(f"{label}  ({STRATEGY_NAMES[label]})", fontsize=13, fontweight="bold")
             ax1.set_ylabel("누적 손익")
             ax1.grid(alpha=0.25)
+            ax1.legend(loc="upper left", fontsize=9)
             ax1.yaxis.set_major_formatter(
                 mticker.FuncFormatter(lambda x, pos: f"{x / 1000:,.0f}K")
             )

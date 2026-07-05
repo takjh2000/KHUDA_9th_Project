@@ -202,7 +202,14 @@ def s01_raw(panel, price_pivot):
     cap_neut = group_neutralize_dynamic(accrual, cap_bucket)
     mom = ts_rank(price_pivot.pct_change(), 252)
     return cap_neut - mom
-
+def s01_original(panel, price_pivot):
+    bps_p = to_pivot(panel, "bps")
+    if bps_p is None:
+        return None
+    bp = bps_p / price_pivot.replace(0, np.nan)
+    d1 = zscore(ts_delta(bp, 21))
+    d3 = zscore(ts_delta(ts_delay(bp, 21), 42))
+    return d1 + d3
 
 def s02_raw(panel, price_pivot):
     oi_p, shares_p, eps_p = (to_pivot(panel, c) for c in ["operating_income", "shares", "eps"])
@@ -216,6 +223,17 @@ def s02_raw(panel, price_pivot):
         return None
     return ts_rank(oey, 126)
 
+def s02_original(panel, price_pivot):
+    oi_p, shares_p, eps_p = (to_pivot(panel, c) for c in ["operating_income", "shares", "eps"])
+    if oi_p is not None and shares_p is not None:
+        cap = price_pivot * shares_p.reindex_like(price_pivot).ffill(limit=252)
+        oey = oi_p.reindex_like(price_pivot).ffill(limit=252) / cap.replace(0, np.nan)
+    elif eps_p is not None:
+        oey = eps_p / price_pivot.replace(0, np.nan)
+    else:
+        return None
+    return ts_rank(oey, 126)
+
 
 def s03_raw(panel, price_pivot):
     cf_op_p, eq_p, ta_p = (to_pivot(panel, c) for c in ["cashflow_op", "equity", "total_assets"])
@@ -225,7 +243,14 @@ def s03_raw(panel, price_pivot):
     cash_ratio = eq_p.reindex_like(ta).ffill(limit=252) / ta
     cf_ratio = cf_op_p.reindex_like(ta).ffill(limit=252) / ta
     return -ts_corr(ts_mean(cash_ratio, 5), ts_mean(cf_ratio, 5), 252)
-
+def s03_original(panel, price_pivot):
+    bps_p = to_pivot(panel, "bps")
+    if bps_p is None:
+        return None
+    bp = bps_p / price_pivot.replace(0, np.nan)
+    d1 = zscore(ts_delta(bp, 21))
+    d3 = zscore(ts_delta(ts_delay(bp, 21), 42))
+    return d1 + d3
 
 def s05_raw(panel, price_pivot, industry_s):
     cf_op_p, shares_p = to_pivot(panel, "cashflow_op"), to_pivot(panel, "shares")
@@ -246,6 +271,23 @@ def s05_raw(panel, price_pivot, industry_s):
     common = z.columns.intersection(groups.index)
     return group_rank(z[common], groups[common])
 
+def s05_original(panel, price_pivot, industry_s):
+    cf_op_p, shares_p = to_pivot(panel, "cashflow_op"), to_pivot(panel, "shares")
+    if cf_op_p is None:
+        return None
+    if shares_p is not None:
+        cap = price_pivot * shares_p.reindex_like(price_pivot).ffill(limit=252)
+        cf_yield = cf_op_p.reindex_like(price_pivot).ffill(limit=252) / cap.replace(0, np.nan)
+    else:
+        ta_p = to_pivot(panel, "total_assets")
+        if ta_p is None:
+            return None
+        cf_yield = cf_op_p.reindex_like(price_pivot).ffill(limit=252) / \
+                   ta_p.reindex_like(price_pivot).ffill(limit=252).replace(0, np.nan)
+    z = ts_zscore(cf_yield, 63)
+    groups = make_groups(panel, industry_s)
+    common = z.columns.intersection(groups.index)
+    return group_rank(z[common], groups[common])
 
 def s06_raw(panel, price_pivot):
     debt_p, ta_p = to_pivot(panel, "debt"), to_pivot(panel, "total_assets")
@@ -258,7 +300,14 @@ def s06_raw(panel, price_pivot):
     condition = debt_piv > ts_mean(debt_piv, 63)
     f = trade_when(condition, alpha, -1)
     return hump(f, 0.003)
-
+def s06_original(panel, price_pivot):
+    bps_p = to_pivot(panel, "bps")
+    if bps_p is None:
+        return None
+    bp = bps_p / price_pivot.replace(0, np.nan)
+    d1 = zscore(ts_delta(bp, 21))
+    d3 = zscore(ts_delta(ts_delay(bp, 21), 42))
+    return d1 + d3
 
 def s07_raw(panel, price_pivot, industry_s):
     eps_p, bps_p = to_pivot(panel, "eps"), to_pivot(panel, "bps")
@@ -277,6 +326,22 @@ def s07_raw(panel, price_pivot, industry_s):
     mom_group = bucket(rank(ts_mean(returns, 240)), n=10)
     return group_neutralize_dynamic(signal, mom_group)
 
+def s07_original(panel, price_pivot, industry_s):
+    eps_p, bps_p = to_pivot(panel, "eps"), to_pivot(panel, "bps")
+    if eps_p is None or bps_p is None:
+        return None
+    underrated = eps_p / price_pivot.replace(0, np.nan)
+    low_pbr = bps_p / price_pivot.replace(0, np.nan)
+    groups = make_groups(panel, industry_s)
+    common1 = underrated.columns.intersection(groups.index)
+    underrated_adj = rank(group_neutralize(underrated[common1], groups[common1]))
+    low_pbr_ts = ts_rank(low_pbr, 63)
+    common2 = low_pbr_ts.columns.intersection(groups.index)
+    low_pbr_recent = group_rank(low_pbr_ts[common2], groups[common2])
+    signal = df_max(underrated_adj, low_pbr_recent)
+    returns = price_pivot.pct_change()
+    mom_group = bucket(rank(ts_mean(returns, 240)), n=10)
+    return group_neutralize_dynamic(signal, mom_group)
 
 def s10_raw(panel, price_pivot):
     oi_p, ta_p, shares_p = (
@@ -296,7 +361,14 @@ def s10_raw(panel, price_pivot):
     else:
         signal = buyback
     return signal.ffill(limit=5)
-
+def s10_original(panel, price_pivot):
+    bps_p = to_pivot(panel, "bps")
+    if bps_p is None:
+        return None
+    bp = bps_p / price_pivot.replace(0, np.nan)
+    d1 = zscore(ts_delta(bp, 21))
+    d3 = zscore(ts_delta(ts_delay(bp, 21), 42))
+    return d1 + d3
 
 def s11_raw(panel, price_pivot):
     sga_p, oi_p, sps_p, shares_p = (
@@ -313,7 +385,14 @@ def s11_raw(panel, price_pivot):
     cond = revenue > ts_mean(revenue, 252)
     a = hump(f, 0.001)
     return trade_when(cond, zscore(a), ~cond)
-
+def s11_original(panel, price_pivot):
+    bps_p = to_pivot(panel, "bps")
+    if bps_p is None:
+        return None
+    bp = bps_p / price_pivot.replace(0, np.nan)
+    d1 = zscore(ts_delta(bp, 21))
+    d3 = zscore(ts_delta(ts_delay(bp, 21), 42))
+    return d1 + d3
 
 def s12_raw(panel, price_pivot):
     gw_p, ta_p, sps_p, eps_p, shares_p = (
@@ -336,7 +415,14 @@ def s12_raw(panel, price_pivot):
     else:
         f = gw_signal
     return f
-
+def s12_original(panel, price_pivot):
+    bps_p = to_pivot(panel, "bps")
+    if bps_p is None:
+        return None
+    bp = bps_p / price_pivot.replace(0, np.nan)
+    d1 = zscore(ts_delta(bp, 21))
+    d3 = zscore(ts_delta(ts_delay(bp, 21), 42))
+    return d1 + d3
 
 def s14_raw(panel, price_pivot):
     debt_p, ta_p = to_pivot(panel, "debt"), to_pivot(panel, "total_assets")
@@ -349,7 +435,14 @@ def s14_raw(panel, price_pivot):
     regime_raw = ts_zscore(ts_std(ret, 21), 63)
     f = trade_when(regime_raw < -0.1, f_raw, regime_raw > 0.8)
     return f.ffill(limit=5)
-
+def s14_original(panel, price_pivot):
+    bps_p = to_pivot(panel, "bps")
+    if bps_p is None:
+        return None
+    bp = bps_p / price_pivot.replace(0, np.nan)
+    d1 = zscore(ts_delta(bp, 21))
+    d3 = zscore(ts_delta(ts_delay(bp, 21), 42))
+    return d1 + d3
 
 def s15_raw(panel, price_pivot):
     bps_p = to_pivot(panel, "bps")
@@ -360,34 +453,56 @@ def s15_raw(panel, price_pivot):
     d3 = zscore(ts_delta(ts_delay(bp, 21), 42))
     return d1 + d3
 
+def s15_original(panel, price_pivot):
+    bps_p = to_pivot(panel, "bps")
+    if bps_p is None:
+        return None
+    bp = bps_p / price_pivot.replace(0, np.nan)
+    d1 = zscore(ts_delta(bp, 21))
+    d3 = zscore(ts_delta(ts_delay(bp, 21), 42))
+    return d1 + d3
+
 
 # ── 전략 메타데이터 (11개만) ────────────────────────────────────────────────────
 
 STRATEGIES = {
     "Ouality#1-Low Accrual Clean":          (s01_raw, 6,  "Market",   0.08),
-    # "Value#1-Operating Income Earnings Yield":                 (s02_raw, 4,  "Industry", 0.08),
-    # "Quality#2-Cash & Cash Flow Divergence Information":    (s03_raw, 4,  "Industry", 0.04),
-    # "Value#2-Industry-Neutral Cash Flow Yield ":  (s05_raw, 4,  "Industry",   0.08),
-    # "Value#3-Aggressive Dual Value Blend with Momentum Neutralization": (s07_raw, 4,  "Market",   0.01),
-    # "Quality#3-Profitable Buyback & Cash Flow Distortion":   (s10_raw, 1,  "Market",   0.08),
-    # "Quality#4-SG&A-Driven Marketing Efficiency Dynamic":           (s11_raw, 2,  "Market",   0.08),
-    # "Quality#5-Goodwill Overvaluation & Financial Accrued Risk":     (s12_raw, 4,  "Industry", 0.04),
-    # "S14_VolRegimeDebt":       (s14_raw, 16, "Market",   0.01),
-    # "Value#4-Book to Cap Momentum":        (s15_raw, 5,  "Industry", 0.04),
+    "Value#1-Operating Income Earnings Yield":                 (s02_raw, 4,  "Industry", 0.08),
+    "Quality#2-Cash & Cash Flow Divergence Information":    (s03_raw, 4,  "Industry", 0.04),
+    "Value#2-Industry-Neutral Cash Flow Yield ":  (s05_raw, 4,  "Industry",   0.08),
+    "Value#3-Aggressive Dual Value Blend with Momentum Neutralization": (s07_raw, 4,  "Market",   0.01),
+    "Quality#3-Profitable Buyback & Cash Flow Distortion":   (s10_raw, 1,  "Market",   0.08),
+    "Quality#4-SG&A-Driven Marketing Efficiency Dynamic":           (s11_raw, 2,  "Market",   0.08),
+    "Quality#5-Goodwill Overvaluation & Financial Accrued Risk":     (s12_raw, 4,  "Industry", 0.04),
+    "S14_VolRegimeDebt":       (s14_raw, 16, "Market",   0.01),
+    "Value#4-Book to Cap Momentum":        (s15_raw, 5,  "Industry", 0.04),
+}
+
+ORIGINAL_FUNCS = {
+    s01_raw: s01_original,
+    s02_raw: s02_original,
+    s03_raw: s03_original,
+    s05_raw: s05_original,
+    s07_raw: s07_original,
+    s10_raw: s10_original,
+    s11_raw: s11_original,
+    s12_raw: s12_original,
+    s14_raw: s14_original,
+    s15_raw: s15_original,
 }
 
 STRATEGY_NAMES = {
     "Ouality#1-Low Accrual Clean":          "현금흐름",
-    # "Value#1-Operating Income Earnings Yield":                 "영업이익",
-    # "Quality#2-Cash & Cash Flow Divergence Information":    "현금",
-    # "Value#2-Industry-Neutral Cash Flow Yield ":  "영업현금흐름",
-    # "S06_DebtSpikeReversal":   "Debt Spike Reversal",
-    # "Value#3-Aggressive Dual Value Blend with Momentum Neutralization": "ebitda",
-    # "Quality#3-Profitable Buyback & Cash Flow Distortion":   "자사주매입",
-    # "Quality#4-SG&A-Driven Marketing Efficiency Dynamic":           "판매관리비",
-    # "Quality#5-Goodwill Overvaluation & Financial Accrued Risk":     "영업권",
-    # "S14_VolRegimeDebt":       "Vol-Regime Debt Decay",
-    # "Value#4-Book to Cap Momentum":        "PBR",
+    "Value#1-Operating Income Earnings Yield":                 "영업이익",
+    "Quality#2-Cash & Cash Flow Divergence Information":    "현금",
+    "Value#2-Industry-Neutral Cash Flow Yield ":  "영업현금흐름",
+    "S06_DebtSpikeReversal":   "Debt Spike Reversal",
+    "Value#3-Aggressive Dual Value Blend with Momentum Neutralization": "ebitda",
+    "Quality#3-Profitable Buyback & Cash Flow Distortion":   "자사주매입",
+    "Quality#4-SG&A-Driven Marketing Efficiency Dynamic":           "판매관리비",
+    "Quality#5-Goodwill Overvaluation & Financial Accrued Risk":     "영업권",
+    "S14_VolRegimeDebt":       "Vol-Regime Debt Decay",
+    "Value#4-Book to Cap Momentum":        "PBR",
 }
 
 
@@ -430,7 +545,23 @@ def main():
         print(f"  Returns {ret:7.2%}  Sharpe {s:6.2f}  Margin {mg:7.1f}bp  "
               f"Turnover {t:6.2%}  MDD {m:7.2%}  Fitness {fit:6.2f}", flush=True)
 
-        all_results[label] = res
+        original_res = None
+        fn_original = ORIGINAL_FUNCS.get(fn)
+        if fn_original is not None:
+            if label in ("S05_IndustryNeutralCFY", "S07_AggressiveDualValue"):
+                original_raw_f = fn_original(panel, price_pivot, industry_s)
+            else:
+                original_raw_f = fn_original(panel, price_pivot)
+            if original_raw_f is not None:
+                original_factor = build_factor(
+                    original_raw_f, decay_n, neut_level, trunc, sector_s, industry_s, panel
+                )
+                original_bt = LongShortBacktester(
+                    price=bt_price_pivot, factor=original_factor, universe=universe, config=cfg
+                )
+                original_res = original_bt.run()
+
+        all_results[label] = {"raw": res, "original": original_res}
         rows.append({
             "전략": label, "전략명": name,
             "Returns": ret, "Sharpe": s, "Margin": mg,
@@ -486,7 +617,10 @@ def generate_pdf(summary, all_results):
         pdf.savefig(fig)
         plt.close(fig)
 
-        for label, res in all_results.items():
+        for label, res_dict in all_results.items():
+            res = res_dict["raw"]
+            original_res = res_dict.get("original")
+
             ls = res.ls_returns.dropna()
             cum = (1 + ls).cumprod()
             dd = (cum - cum.cummax()) / cum.cummax()
@@ -494,12 +628,17 @@ def generate_pdf(summary, all_results):
 
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 6.5),
                                             gridspec_kw={"height_ratios": [3, 1]})
-            ax1.plot(cum.index, cum.values, color="#1565C0", lw=1.4)
-            ax1.fill_between(cum.index, cum.values, 1, alpha=0.1, color="#1565C0")
+            ax1.plot(cum.index, cum.values, color="red", lw=1.4, label="가설")
+            ax1.fill_between(cum.index, cum.values, 1, alpha=0.1, color="red")
+            if original_res is not None:
+                ls_o = original_res.ls_returns.dropna()
+                cum_o = (1 + ls_o).cumprod()
+                ax1.plot(cum_o.index, cum_o.values, color="#59CDD5", lw=1.4, label="기준")
             ax1.axhline(1, color="gray", lw=0.5, linestyle="--")
             ax1.set_title(f"{label}  ({STRATEGY_NAMES[label]})", fontsize=13, fontweight="bold")
             ax1.set_ylabel("누적 배수")
             ax1.grid(alpha=0.25)
+            ax1.legend(loc="upper left", fontsize=9)
             ax1.xaxis.set_major_locator(mdates.YearLocator())
             ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
 
