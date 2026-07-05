@@ -18,7 +18,7 @@ import matplotlib.ticker as mticker
 import matplotlib.dates as mdates
 from matplotlib.backends.backend_pdf import PdfPages
 
-matplotlib.rcParams["font.family"] = "Malgun Gothic"
+matplotlib.rcParams["font.family"] = "Apple Gothic"
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 from backtest.engine import LongShortBacktester, Config

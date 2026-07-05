@@ -142,7 +142,7 @@ def ts_corr(a: pd.DataFrame, b: pd.DataFrame, n: int) -> pd.DataFrame:
 
 def ts_backfill(df: pd.DataFrame, n: int) -> pd.DataFrame:
     """NaN을 최근 유효값으로 채움 (최대 n 기간)"""
-    return df.fillna(method="ffill", limit=n)
+    return df.ffill(limit=n)
 
 
 def trade_when(entry: pd.DataFrame, alpha: pd.DataFrame, exit) -> pd.DataFrame:
