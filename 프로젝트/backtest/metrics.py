@@ -105,7 +105,7 @@ def build_summary_table(results: dict[str, BacktestResult]) -> pd.DataFrame:
     df["Returns"]  = df["Returns"].map(lambda x: f"{x:.2%}" if pd.notna(x) else "N/A")
     df["Sharpe"]   = df["Sharpe"].map(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
     df["Turnover"] = df["Turnover"].map(lambda x: f"{x:.2%}" if pd.notna(x) else "N/A")
-    df["Drawdown"] = df["Drawdown"].map(lambda x: f"{x:.2%}" if pd.notna(x) else "N/A")
+    df["Drawdown"] = df["Drawdown"].map(lambda x: f"{abs(x):.2%}" if pd.notna(x) else "N/A")
     df["Margin"]   = df["Margin"].map(lambda x: f"{x:.1f}" if pd.notna(x) else "N/A")
     df["Fitness"]  = df["Fitness"].map(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
     return df

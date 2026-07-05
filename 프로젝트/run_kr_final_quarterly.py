@@ -24,7 +24,7 @@ matplotlib.rcParams["axes.unicode_minus"] = False
 
 from config import PROCESSED_DIR, RAW_DIR
 from backtest.engine import LongShortBacktester, Config
-from backtest.metrics import cagr, sharpe, mdd, margin
+from backtest.metrics import returns_metric, sharpe, mdd, margin, fitness
 from factors.wq_ops import (
     rank, zscore, ts_mean, ts_std, ts_rank, ts_zscore,
     ts_delta, ts_delay, ts_corr, ts_backfill,
@@ -158,16 +158,17 @@ def main():
             print("  수익률 없음, 건너뜀", flush=True)
             continue
 
-        c, s, m, t = cagr(ls), sharpe(ls), mdd(ls), res.avg_turnover
+        ret, s, m, t = returns_metric(ls), sharpe(ls), mdd(ls), res.avg_turnover
         mg = margin(ls, t)
-        print(f"  CAGR {c:7.2%}  Sharpe {s:6.2f}  Margin {mg:7.1f}bp  "
-              f"Turnover {t:6.2%}  MDD {m:7.2%}", flush=True)
+        fit = fitness(s, ret, t)
+        print(f"  Returns {ret:7.2%}  Sharpe {s:6.2f}  Margin {mg:7.1f}bp  "
+              f"Turnover {t:6.2%}  MDD {m:7.2%}  Fitness {fit:6.2f}", flush=True)
 
         all_results[label] = res
         rows.append({
             "전략": label, "전략명": name,
-            "Return(CAGR)": c, "Sharpe": s, "Margin(bp)": mg,
-            "Turnover": t, "Drawdown(MDD)": m,
+            "Returns": ret, "Sharpe": s, "Margin": mg,
+            "Turnover": t, "Drawdown": m, "Fitness": fit,
         })
 
     if not rows:
@@ -196,18 +197,19 @@ def generate_pdf(summary, all_results):
                   fontsize=10.5, color="#555")
 
         disp = summary.set_index("전략")[
-            ["Return(CAGR)", "Sharpe", "Margin(bp)", "Turnover", "Drawdown(MDD)"]
+            ["Returns", "Sharpe", "Margin", "Turnover", "Drawdown", "Fitness"]
         ].copy()
-        disp["Return(CAGR)"]  = disp["Return(CAGR)"].map(lambda x: f"{x:.2%}")
+        disp["Returns"]       = disp["Returns"].map(lambda x: f"{x:.2%}")
         disp["Sharpe"]        = disp["Sharpe"].map(lambda x: f"{x:.2f}")
-        disp["Margin(bp)"]    = disp["Margin(bp)"].map(lambda x: f"{x:.1f}")
+        disp["Margin"]    = disp["Margin"].map(lambda x: f"{x:.1f}")
         disp["Turnover"]      = disp["Turnover"].map(lambda x: f"{x:.2%}")
-        disp["Drawdown(MDD)"] = disp["Drawdown(MDD)"].map(lambda x: f"{x:.2%}")
+        disp["Drawdown"] = disp["Drawdown"].map(lambda x: f"{abs(x):.2%}")
+        disp["Fitness"]       = disp["Fitness"].map(lambda x: f"{x:.2f}")
 
         ax = fig.add_axes([0.05, 0.08, 0.9, 0.72])
         ax.axis("off")
         cell_text = [[idx] + list(row) for idx, row in zip(disp.index, disp.values)]
-        col_labels = ["전략", "Return(CAGR)", "Sharpe", "Margin(bp)", "Turnover", "Drawdown(MDD)"]
+        col_labels = ["전략", "Returns", "Sharpe", "Margin", "Turnover", "Drawdown", "Fitness"]
         tbl = ax.table(cellText=cell_text, colLabels=col_labels, loc="center", cellLoc="center")
         tbl.auto_set_font_size(False)
         tbl.set_fontsize(10)
@@ -227,7 +229,7 @@ def generate_pdf(summary, all_results):
             # 2,000,000원(2000 단위 × k=1000) 초기 투자금 기준 누적 손익
             profit = (2000 * cum - 2000) * 1000
 
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 7),
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7, 7),
                                             gridspec_kw={"height_ratios": [3, 1]})
             ax1.plot(profit.index, profit.values, color="#59CDD5", lw=1.4)
             ax1.axhline(0, color="gray", lw=0.5, linestyle="--")
@@ -243,10 +245,11 @@ def generate_pdf(summary, all_results):
                 tick.set_rotation(45)
                 tick.set_ha("right")
 
-            metrics_str = (f"CAGR {row['Return(CAGR)']:.2%}  |  Sharpe {row['Sharpe']:.2f}  |  "
-                           f"Margin {row['Margin(bp)']:.1f}bp  |  Turnover {row['Turnover']:.2%}  |  "
-                           f"MDD {row['Drawdown(MDD)']:.2%}")
-            ax1.set_xlabel(metrics_str, fontsize=9.5)
+            metrics_str = (f"Returns {row['Returns']:.2%}  |  Sharpe {row['Sharpe']:.2f}  |  "
+                           f"Margin {row['Margin']:.1f}bp\n"
+                           f"Turnover {row['Turnover']:.2%}  |  Drawdown {abs(row['Drawdown']):.2%}  |  "
+                           f"Fitness {row['Fitness']:.2f}")
+            ax1.set_xlabel(metrics_str, fontsize=9)
 
             ax2.fill_between(dd.index, dd.values, 0, alpha=0.5, color="#D32F2F")
             ax2.set_ylabel("DD")
