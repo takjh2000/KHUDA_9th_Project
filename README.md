@@ -154,7 +154,7 @@ python run_hypothesis_test.py
 
 ---
 
-## Part 2 — WQ Brain 11개 전략 (한국 시장)
+## Part 2 — WQ Brain 9개 전략 (한국 시장)
 
 WorldQuant Brain 스타일의 알파 전략을 KOSPI 200 대상으로 백테스트 (2019.01–2023.12, 상위 50% 롱 / 하위 50% 숏, 스코어 가중 방식으로 종목별 비중 산출, 팩터별 트렁케이션 적용).
 
